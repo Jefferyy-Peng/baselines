@@ -22,9 +22,9 @@ CURRENT_FOLD = 5
 GPU_NUM = len(DEVICE.split(','))
 
 #--------------------------------- mode and data path setting
-PATH_DIR = './dataset/segdata/data_2d'
+PATH_DIR = './dataset/segdata/data_3d'
 PATH_LIST = glob.glob(os.path.join(PATH_DIR,'*.hdf5'))
-PATH_AP = './dataset/segdata/data_3d'
+PATH_AP = './dataset/segdata/data_2d'
 AP_LIST = glob.glob(os.path.join(PATH_AP,'*.hdf5'))
 #--------------------------------- 
 

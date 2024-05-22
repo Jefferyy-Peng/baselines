@@ -9,17 +9,13 @@ from segmentation.utils import hdf5_reader
 
 
 class Normalize(object):
-  def __call__(self,sample):
-    ct = sample['ct']
-    seg = sample['seg']
-    for i in range(ct.shape[0]):
-        if np.max(ct[i])!=0:
-            ct[i] = ct[i]/np.max(ct[i])
-        
-    ct[ct<0] = 0
-
-    new_sample = {'ct':ct, 'seg':seg}
-    return new_sample
+    def __call__(self,sample):
+        if sample.shape[0] == 3:
+            for i in range(sample.shape[0]):
+                if np.max(sample[i]) != 0:
+                    sample[i] = sample[i] / np.max(sample[i])
+            sample[sample<0] = 0
+        return sample
 
 class RandomRotate2D(object):
     """
@@ -39,7 +35,7 @@ class RandomRotate2D(object):
         label = sample['seg']
 
         cts = []
-        for i in range(ct_image.shape[0]):
+        for i in range(ct_image.shape[1]):
             cts.append(Image.fromarray(ct_image[i]))
         label = Image.fromarray(np.uint8(label))
 
@@ -98,32 +94,40 @@ class RandomFlip2D(object):
         return {'ct':ct_image, 'seg': label}
 
 class To_Tensor(object):
-  '''
-  Convert the data in sample to torch Tensor.
-  Args:
-  - n_class: the number of class
-  '''
-  def __init__(self,num_class=2,input_channel = 3):
-    self.num_class = num_class
-    self.channel = input_channel
+    '''
+    Convert the data in sample to torch Tensor.
+    Args:
+    - n_class: the number of class
+    '''
+    def __init__(self,num_class=2,input_channel = 3):
+        self.num_class = num_class
+        self.channel = input_channel
 
-  def __call__(self,sample):
+    def __call__(self,sample):
+        if sample.shape[0] == 3:
+            new_sample = sample[:self.channel, ...]
+        else:
+            new_sample = np.empty((self.num_class,) + sample.shape, dtype=np.float32)
+            for z in range(1, self.num_class):
+                temp = (sample == z).astype(np.float32)
+                new_sample[z, ...] = temp
+            new_sample[0, ...] = np.amax(new_sample[1:, ...], axis=0) == 0
 
-    ct = sample['ct']
-    seg = sample['seg']
+        # ct = sample['ct']
+        # seg = sample['seg']
+        #
+        # new_image = ct[:self.channel,...]
+        # new_label = np.empty((self.num_class,) + seg.shape, dtype=np.float32)
+        # for z in range(1, self.num_class):
+        #     temp = (seg==z).astype(np.float32)
+        #     new_label[z,...] = temp
+        # new_label[0,...] = np.amax(new_label[1:,...],axis=0) == 0
+        #
+        # # convert to Tensor
+        # new_sample = {'image': torch.from_numpy(new_image),
+        #               'label': torch.from_numpy(new_label)}
 
-    new_image = ct[:self.channel,...]
-    new_label = np.empty((self.num_class,) + seg.shape, dtype=np.float32)
-    for z in range(1, self.num_class):
-        temp = (seg==z).astype(np.float32)
-        new_label[z,...] = temp
-    new_label[0,...] = np.amax(new_label[1:,...],axis=0) == 0   
-   
-    # convert to Tensor
-    new_sample = {'image': torch.from_numpy(new_image),
-                  'label': torch.from_numpy(new_label)}
-    
-    return new_sample
+        return torch.from_numpy(new_sample)
 
 class DataGenerator(Dataset):
   '''
@@ -150,10 +154,11 @@ class DataGenerator(Dataset):
     ct = hdf5_reader(self.path_list[index],'ct')
     seg = hdf5_reader(self.path_list[index],'seg') 
 
-    sample = {'ct': ct, 'seg':seg}
     # Transform
     if self.transform is not None:
-      sample = self.transform(sample)
+        ct = self.transform(ct)
+        seg = self.transform(seg)
+    sample = {'ct': ct, 'seg': seg}
 
     return sample
 

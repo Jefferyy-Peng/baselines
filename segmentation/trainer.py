@@ -19,6 +19,8 @@ from segmentation.data_loader import (DataGenerator, Normalize, RandomFlip2D,
 from segmentation.loss import Deep_Supervised_Loss
 from segmentation.model import itunet_2d
 from segmentation.utils import dfs_remove_weight, poly_lr
+from monai.networks.nets import SwinUNETR
+import torchio as tio
 
 warnings.filterwarnings('ignore')
 
@@ -52,15 +54,23 @@ class SemanticSeg(object):
 
         # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
 
-        self.net = itunet_2d(n_channels=self.channels,n_classes=self.num_classes, image_size= tuple(self.input_shape), transformer_depth = self.transformer_depth)
+        self.net = SwinUNETR(
+            img_size=(128, 128, 128),
+            in_channels=3,
+            out_channels=2,
+            feature_size=48,
+            use_checkpoint=False,
+        )
 
         if self.pre_trained:
             self._get_pre_trained(self.weight_path,ckpt_point)
 
         self.train_transform = [
             Normalize(),   #1
-            RandomRotate2D(),  #6
-            RandomFlip2D(mode='hv'),  #7
+            tio.Resize(target_shape=(24, 256, 256)),
+            tio.CropOrPad(target_shape=(256,256,256)),
+            # RandomRotate3D(),  #6
+            # RandomFlip3D(mode='hv'),  #7
             To_Tensor(num_class=self.num_classes,input_channel = self.channels)   # 10
         ]
 
