@@ -104,9 +104,9 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
 
 
 def make_data(
-    base_dir: Union[Path, str] = '../nnUNet_raw_data/Task2201_picai_baseline/imagesTr',
-    label_dir: Union[Path, str] = '../nnUNet_raw_data/Task2201_picai_baseline/labelsTr',
-    d2_dir: Union[Path, str] = 'path/to/images_illness_3c',
+    base_dir: Union[Path, str] = '../../picai_baselines/workdir/nnUNet_raw_data/Task2203_picai_baseline/imagesTr',
+    label_dir: Union[Path, str] = '../../picai_baselines/workdir/nnUNet_raw_data/Task2203_picai_baseline/labelsTr',
+    d2_dir: Union[Path, str] = './images_illness_3c',
     csv_save_path: Union[Path, str] = 'picai_illness_3c.csv',
 ):
     os.makedirs(d2_dir, exist_ok=True)
@@ -230,6 +230,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--mode', default='make_data', choices=["make_data", "predict"],
                         help='choose the mode', type=str)
     args = parser.parse_args()
+    args.mode = "make_data"
     if args.mode == "make_data":
         print('makedata')
         make_data()

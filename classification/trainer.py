@@ -66,8 +66,9 @@ class Classifier(object):
         self.milestones = milestones
         self.use_fp16 = use_fp16
         self.external_pretrained = external_pretrained
-
-        os.environ['CUDA_VISIBLE_DEVICES'] = self.device
+        #
+        # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
+        # os.environ["WORLD_SIZE"] = "1"
 
         self.net = self._get_net(self.net_name)
         if self.pre_trained:
@@ -137,8 +138,8 @@ class Classifier(object):
         )
 
         # copy to gpu
-        net = net.cuda()
-        loss = loss.cuda()
+        net = net.to('cuda:0')
+        loss = loss.to('cuda:0')
 
         # optimizer setting
         optimizer = self._get_optimizer(optimizer, net, lr, weight_decay)

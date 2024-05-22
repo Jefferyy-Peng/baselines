@@ -49,6 +49,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--mode', default='train-cross', choices=["train-cross"],
                         help='choose the mode', type=str)
     args = parser.parse_args()
+    args.mode = 'train-cross'
     
     label_dict = {}
     # Set data path & classifier

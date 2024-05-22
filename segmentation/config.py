@@ -37,7 +37,7 @@ INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
   'batch_size':24,  
-  'num_workers':4,
+  'num_workers':0,
   'device':DEVICE,
   'pre_trained':PRE_TRAINED,
   'ckpt_point':CKPT_POINT,

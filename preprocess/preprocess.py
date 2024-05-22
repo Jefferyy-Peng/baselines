@@ -112,10 +112,10 @@ def main(taskname="Task2201_picai_baseline"):
     parser = argparse.ArgumentParser()
 
     # input data and model directories
-    parser.add_argument('--workdir', type=str, default="/workdir")
-    parser.add_argument('--imagesdir', type=str, default=os.environ.get('SM_CHANNEL_IMAGES', "/input/images"))
-    parser.add_argument('--labelsdir', type=str, default=os.environ.get('SM_CHANNEL_LABELS', "/input/picai_labels"))
-    parser.add_argument('--outputdir', type=str, default=os.environ.get('SM_MODEL_DIR', "/output"))
+    parser.add_argument('--workdir', type=str, default="../workdir")
+    parser.add_argument('--imagesdir', type=str, default=os.environ.get('SM_CHANNEL_IMAGES', "../../picai_baselines/input/images"))
+    parser.add_argument('--labelsdir', type=str, default=os.environ.get('SM_CHANNEL_LABELS', "../../picai_baselines/input/picai_labels"))
+    parser.add_argument('--outputdir', type=str, default=os.environ.get('SM_MODEL_DIR', "../output"))
 
     args, _ = parser.parse_known_args()
 

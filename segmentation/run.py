@@ -56,6 +56,7 @@ if __name__ == "__main__":
                         help='choose the mode',
                         type=str)
     args = parser.parse_args()
+    args.mode = 'train-cross'
 
     # Set data path & segnetwork
     if args.mode != 'train-cross':

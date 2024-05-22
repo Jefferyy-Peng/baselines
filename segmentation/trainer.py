@@ -50,7 +50,7 @@ class SemanticSeg(object):
 
         self.transformer_depth = transformer_depth
 
-        os.environ['CUDA_VISIBLE_DEVICES'] = self.device
+        # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
 
         self.net = itunet_2d(n_channels=self.channels,n_classes=self.num_classes, image_size= tuple(self.input_shape), transformer_depth = self.transformer_depth)
 

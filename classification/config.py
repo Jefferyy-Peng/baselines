@@ -3,7 +3,7 @@ __all__ = ['efficientnet-b5']
 TASK = 'picai'
 NET_NAME = 'efficientnet-b5'
 VERSION = 'v0'
-DEVICE = '3'
+DEVICE = '0'
 # Must be True when pre-training and inference
 PRE_TRAINED = False
 # 1,2,3,4
@@ -36,7 +36,7 @@ INIT_TRAINER = {
     'num_classes': NUM_CLASSES,
     'input_shape': (384,384),
     'batch_size': 24,
-    'num_workers': 4,
+    'num_workers': 8,
     'device': DEVICE,
     'pre_trained': PRE_TRAINED,
     'weight_path': WEIGHT_PATH,
