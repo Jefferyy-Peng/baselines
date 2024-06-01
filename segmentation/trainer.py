@@ -66,10 +66,10 @@ class SemanticSeg(object):
 
         self.train_transform = [
             Normalize(),   #1
-            tio.Resize(target_shape=(24, 128, 128)),
-            tio.CropOrPad(target_shape=(32, 128, 128)),
-            # RandomRotate3D(),  #6
-            # RandomFlip3D(mode='hv'),  #7
+            # tio.Resize(target_shape=(24, 128, 128)),
+            # tio.CropOrPad(target_shape=(32, 128, 128)),
+            RandomRotate2D(),  #6
+            RandomFlip2D(mode='hv'),  #7
             To_Tensor(num_class=self.num_classes, input_channel = self.channels)   # 10
         ]
 
