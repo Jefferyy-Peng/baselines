@@ -21,6 +21,7 @@ from segmentation.model import itunet_2d
 from segmentation.utils import dfs_remove_weight, poly_lr
 from monai.networks.nets import SwinUNETR
 import torchio as tio
+from TransUNet import VisionTransformer, CONFIGS
 
 warnings.filterwarnings('ignore')
 
@@ -54,13 +55,11 @@ class SemanticSeg(object):
 
         # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
 
-        self.net = SwinUNETR(
-            img_size=(128, 128, 128),
-            in_channels=3,
-            out_channels=2,
-            feature_size=48,
-            use_checkpoint=False,
-        )
+        config_vit = CONFIGS['R50-ViT-B_16']
+        config_vit.n_classes = 2
+        config_vit.n_skip = 3
+        self.net = VisionTransformer(config_vit, img_size=384, num_classes=config_vit.n_classes)
+        self.net.load_from(weights=np.load(config_vit.pretrained_path))
 
         if self.pre_trained:
             self._get_pre_trained(self.weight_path,ckpt_point)
