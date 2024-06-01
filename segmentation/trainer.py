@@ -67,11 +67,11 @@ class SemanticSeg(object):
 
         self.train_transform = [
             Normalize(),   #1
-            tio.Resize(target_shape=(24, 256, 256)),
-            tio.CropOrPad(target_shape=(256,256,256)),
+            tio.Resize(target_shape=(24, 128, 128)),
+            tio.CropOrPad(target_shape=(32, 128, 128)),
             # RandomRotate3D(),  #6
             # RandomFlip3D(mode='hv'),  #7
-            To_Tensor(num_class=self.num_classes,input_channel = self.channels)   # 10
+            To_Tensor(num_class=self.num_classes, input_channel = self.channels)   # 10
         ]
 
     def trainer(self,train_path,val_path,val_ap, cur_fold,output_dir=None,log_dir=None,phase = 'seg'):
@@ -206,8 +206,8 @@ class SemanticSeg(object):
 
         for step,sample in enumerate(train_loader):
 
-            data = sample['image']
-            target = sample['label']
+            data = sample['ct']
+            target = sample['seg']
 
             data = data.cuda()
             target = target.cuda()
@@ -227,8 +227,6 @@ class SemanticSeg(object):
                 loss.backward()
                 optimizer.step()
 
-            output = output[0]
-                       
             output = output.float()
             loss = loss.float()
 
@@ -242,7 +240,7 @@ class SemanticSeg(object):
 
             torch.cuda.empty_cache()
 
-            if self.global_step%10==0:
+            if self.global_step%1==0:
                 rundice, dice_list = run_dice.compute_dice() 
                 print("Category Dice: ", dice_list)
                 print('epoch:{}/{},step:{},train_loss:{:.5f},train_dice:{:.5f},run_dice:{:.5f},lr:{}'.format(epoch,self.n_epoch, step, loss.item(), dice.item(), rundice, optimizer.param_groups[0]['lr']))
@@ -260,7 +258,9 @@ class SemanticSeg(object):
         net.eval()
 
         val_transformer = transforms.Compose([
-            Normalize(), 
+            Normalize(),
+            tio.Resize(target_shape=(24, 128, 128)),
+            tio.CropOrPad(target_shape=(32, 128, 128)),
             To_Tensor(num_class=self.num_classes,input_channel = self.channels)
         ])
 
@@ -282,8 +282,8 @@ class SemanticSeg(object):
 
         with torch.no_grad():
             for step,sample in enumerate(val_loader):
-                data = sample['image']
-                target = sample['label']
+                data = sample['ct']
+                target = sample['seg']
 
                 data = data.cuda()
                 target = target.cuda()
@@ -292,8 +292,6 @@ class SemanticSeg(object):
                     if isinstance(output,tuple):
                         output = output[0]
                 loss = criterion(output,target)
-
-                output = output[0]
 
                 output = output.float()
                 loss = loss.float()
@@ -310,7 +308,7 @@ class SemanticSeg(object):
 
                 torch.cuda.empty_cache()
 
-                if step % 10 == 0:
+                if step % 1 == 0:
                     rundice, dice_list = run_dice.compute_dice() 
                     print("Category Dice: ", dice_list)
                     print('epoch:{}/{},step:{},val_loss:{:.5f},val_dice:{:.5f},run_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss.item(), dice.item(), rundice))

@@ -104,14 +104,8 @@ class To_Tensor(object):
         self.channel = input_channel
 
     def __call__(self,sample):
-        if sample.shape[0] == 3:
-            new_sample = sample[:self.channel, ...]
-        else:
-            new_sample = np.empty((self.num_class,) + sample.shape, dtype=np.float32)
-            for z in range(1, self.num_class):
-                temp = (sample == z).astype(np.float32)
-                new_sample[z, ...] = temp
-            new_sample[0, ...] = np.amax(new_sample[1:, ...], axis=0) == 0
+        if len(sample.shape) == 3:
+            sample = sample[:self.channel, ...]
 
         # ct = sample['ct']
         # seg = sample['seg']
@@ -127,7 +121,7 @@ class To_Tensor(object):
         # new_sample = {'image': torch.from_numpy(new_image),
         #               'label': torch.from_numpy(new_label)}
 
-        return torch.from_numpy(new_sample)
+        return torch.from_numpy(sample)
 
 class DataGenerator(Dataset):
   '''
@@ -152,12 +146,14 @@ class DataGenerator(Dataset):
   def __getitem__(self,index):
 
     ct = hdf5_reader(self.path_list[index],'ct')
-    seg = hdf5_reader(self.path_list[index],'seg') 
+    seg = hdf5_reader(self.path_list[index],'seg')
+    seg = torch.from_numpy(seg).unsqueeze(0).numpy()
 
     # Transform
     if self.transform is not None:
         ct = self.transform(ct)
         seg = self.transform(seg)
+    seg = torch.nn.functional.one_hot(seg.squeeze(0).long(), num_classes=2).permute(3, 0, 1, 2).float()
     sample = {'ct': ct, 'seg': seg}
 
     return sample

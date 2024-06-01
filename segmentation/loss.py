@@ -35,11 +35,4 @@ class Deep_Supervised_Loss(nn.Module):
         super(Deep_Supervised_Loss, self).__init__()
         self.loss = FocalLoss()
     def forward(self, input, target):
-        loss = 0
-        # print(type(input))
-        for i, img in enumerate(input):
-            w = 1 / (2 ** i)
-            label = F.interpolate(target, img.size()[2:])
-            l = self.loss(img, label)
-            loss += l * w
-        return loss 
+        return self.loss(input, target)
