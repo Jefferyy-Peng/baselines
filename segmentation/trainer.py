@@ -27,7 +27,7 @@ from TransUNet import VisionTransformer, CONFIGS
 
 warnings.filterwarnings('ignore')
 
-def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, image_dice=None):
+def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=None):
     """
         Plot each slice of a 3D image, its corresponding previous mask, and ground truth mask.
 
@@ -68,7 +68,7 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, image_dice=None):
     ax.axis('off')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(save_path, f'slice_{n}'))
+    plt.savefig(os.path.join(save_path, f'slice_{count}'))
     plt.close()
 
 class SemanticSeg(object):
@@ -148,8 +148,8 @@ class SemanticSeg(object):
         count = 0
         with torch.no_grad():
             for step, sample in enumerate(val_loader):
-                data = sample['image'].squeeze(0)
-                target = sample['label'].squeeze(0)
+                data = sample['image']
+                target = sample['label']
 
                 data = data.cuda()
                 target = target.cuda()
@@ -157,7 +157,7 @@ class SemanticSeg(object):
                     output = net(data)
                     if isinstance(output, tuple):
                         output = output[0]
-                plot_segmentation2D(data.detach().cpu(), output.detach().cpu(), target.detach().cpu(), plot_path)
+                plot_segmentation2D(data.squeeze(0).permute(1, 2, 0).detach().cpu(), output.squeeze(0)[1].detach().cpu(), target.squeeze(0)[1].detach().cpu(), plot_path, count)
                 count += 1
 
     def trainer(self,train_path,val_path,val_ap, cur_fold,output_dir=None,log_dir=None,phase = 'seg'):

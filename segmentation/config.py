@@ -35,7 +35,7 @@ print(WEIGHT_PATH)
 #you could set it for your device
 INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
-  'n_epoch':1,
+  'n_epoch':160,
   'batch_size':4,
   'num_workers':0,
   'device':DEVICE,
