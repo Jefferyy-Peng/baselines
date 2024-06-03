@@ -103,8 +103,8 @@ class SemanticSeg(object):
         config_vit = CONFIGS['R50-ViT-B_16']
         config_vit.n_classes = 2
         config_vit.n_skip = 3
-        self.net = VisionTransformer(config_vit, img_size=384, num_classes=config_vit.n_classes)
-        self.net.load_from(weights=np.load(config_vit.pretrained_path))
+        self.net = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+    in_channels=3, out_channels=2, init_features=32, pretrained=False)
 
         if self.pre_trained:
             self._get_pre_trained(self.weight_path,ckpt_point)
