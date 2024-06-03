@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+from torchvision import transforms
 
 from utils import hdf5_reader
 
@@ -149,8 +150,11 @@ class DataGenerator(Dataset):
         return len(self.path_list)
 
     def __getitem__(self, index):
-        ct = hdf5_reader(self.path_list[index], 'ct')
-        seg = hdf5_reader(self.path_list[index], 'seg')
+        ct = torch.Tensor(hdf5_reader(self.path_list[index], 'ct'))
+        seg = torch.Tensor(hdf5_reader(self.path_list[index], 'seg')).unsqueeze(0)
+        transform = transforms.Resize(size=(1024, 1024))
+        ct = transform(ct).numpy()
+        seg = transform(seg).squeeze(0).numpy()
 
         sample = {'ct': ct, 'seg': seg}
         # Transform

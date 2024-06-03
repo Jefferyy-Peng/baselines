@@ -13,7 +13,7 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
-        inputs = torch.softmax(inputs,dim=1)
+        inputs = torch.sigmoid(inputs)
         ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
 
         p_t = (inputs * targets) + ((1 - inputs) * (1 - targets))

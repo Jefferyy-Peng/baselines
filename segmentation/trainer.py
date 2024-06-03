@@ -15,11 +15,14 @@ from torch.nn import DataParallel
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from segment_anything import sam_model_registry
+from model_single import ModelEmb
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                                       RandomRotate2D, To_Tensor)
 from loss import Deep_Supervised_Loss
 from model import itunet_2d
+from segmentation.MedSAMAuto import MedSAMAUTO
 from utils import dfs_remove_weight, poly_lr
 from monai.networks.nets import SwinUNETR
 import torchio as tio
@@ -100,18 +103,21 @@ class SemanticSeg(object):
 
         # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
 
-        config_vit = CONFIGS['R50-ViT-B_16']
-        config_vit.n_classes = 2
-        config_vit.n_skip = 3
-        self.net = VisionTransformer(config_vit, img_size=384, num_classes=config_vit.n_classes)
-        self.net.load_from(weights=np.load(config_vit.pretrained_path))
+        sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
+        dense_model = ModelEmb()
+        self.net = MedSAMAUTO(
+                image_encoder=sam_model.image_encoder,
+                mask_decoder=sam_model.mask_decoder,
+                prompt_encoder=sam_model.prompt_encoder,
+                dense_encoder=dense_model,
+                image_size=512
+            )
 
         if self.pre_trained:
             self._get_pre_trained(self.weight_path,ckpt_point)
 
         self.train_transform = [
             Normalize(),   #1
-            # tio.Resize(target_shape=(24, 128, 128)),
             # tio.CropOrPad(target_shape=(32, 128, 128)),
             RandomRotate2D(),  #6
             RandomFlip2D(mode='hv'),  #7
@@ -131,7 +137,6 @@ class SemanticSeg(object):
         os.makedirs(plot_path, exist_ok=True)
         val_transformer = transforms.Compose([
             Normalize(),
-            # tio.Resize(target_shape=(24, 128, 128)),
             # tio.CropOrPad(target_shape=(32, 128, 128)),
             To_Tensor(num_class=self.num_classes, input_channel=self.channels)
         ])
@@ -306,7 +311,7 @@ class SemanticSeg(object):
         for step,sample in enumerate(train_loader):
 
             data = sample['image']
-            target = sample['label']
+            target = sample['label'][:, 1].unsqueeze(1)
 
             data = data.cuda()
             target = target.cuda()
@@ -333,8 +338,8 @@ class SemanticSeg(object):
             train_loss.update(loss.item(),data.size(0))
             train_dice.update(dice.item(),data.size(0))
             
-            output = torch.argmax(torch.softmax(output,dim=1),1).detach().cpu().numpy()  #N*H*W 
-            target = torch.argmax(target,1).detach().cpu().numpy()
+            output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  #N*H*W
+            target = target.detach().cpu().numpy()
             run_dice.update_matrix(target,output)
 
             torch.cuda.empty_cache()
@@ -613,17 +618,14 @@ def compute_dice(predict,target,ignore_index=0):
         mean dice over the batch
     """
     assert predict.shape == target.shape, 'predict & target shape do not match'
-    predict = F.softmax(predict, dim=1)
+    predict = (F.sigmoid(predict) > 0.5).int()
     
-    onehot_predict = torch.argmax(predict,dim=1)#N*H*W
-    onehot_target = torch.argmax(target,dim=1) #N*H*W
-
-    dice_list = np.ones((target.shape[1]),dtype=np.float32)
-    for i in range(target.shape[1]):
+    dice_list = np.ones(2,dtype=np.float32)
+    for i in range(2):
         if i != ignore_index:
-            if i not in onehot_predict and i not in onehot_target:
+            if i not in predict and i not in target:
                 continue
-            dice = binary_dice((onehot_predict==i).float(), (onehot_target==i).float())
+            dice = binary_dice((predict==i).float(), (target==i).float())
             dice_list[i] = round(dice.item(),4)
     
     return np.nanmean(dice_list[1:])
