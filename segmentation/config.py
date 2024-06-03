@@ -1,10 +1,10 @@
 import glob
 import os
 
-from segmentation.utils import get_weight_path
+from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'itunet_d24'
+VERSION = 'TransUNet_empty_images'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -35,7 +35,7 @@ print(WEIGHT_PATH)
 #you could set it for your device
 INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
-  'n_epoch':160,
+  'n_epoch':1,
   'batch_size':4,
   'num_workers':0,
   'device':DEVICE,

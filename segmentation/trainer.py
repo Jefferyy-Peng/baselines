@@ -1,3 +1,4 @@
+import copy
 import math
 import os
 import shutil
@@ -5,8 +6,9 @@ import warnings
 
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
 from picai_eval import evaluate
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 from torch.cuda.amp import GradScaler
 from torch.cuda.amp import autocast as autocast
 from torch.nn import DataParallel
@@ -14,17 +16,60 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from segmentation.data_loader import (DataGenerator, Normalize, RandomFlip2D,
+from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                                       RandomRotate2D, To_Tensor)
-from segmentation.loss import Deep_Supervised_Loss
-from segmentation.model import itunet_2d
-from segmentation.utils import dfs_remove_weight, poly_lr
+from loss import Deep_Supervised_Loss
+from model import itunet_2d
+from utils import dfs_remove_weight, poly_lr
 from monai.networks.nets import SwinUNETR
 import torchio as tio
 from TransUNet import VisionTransformer, CONFIGS
 
 warnings.filterwarnings('ignore')
 
+def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, image_dice=None):
+    """
+        Plot each slice of a 3D image, its corresponding previous mask, and ground truth mask.
+
+        Parameters:
+        img3D (numpy.ndarray): The 3D image array of shape (depth, height, width).
+        prev_masks (numpy.ndarray): The 3D array of previous masks of shape (depth, height, width).
+        gt3D (numpy.ndarray): The 3D array of ground truth masks of shape (depth, height, width).
+        slice_axis (int): The axis along which to slice the image (0=depth, 1=height, 2=width).
+        """
+    os.makedirs(save_path, exist_ok=True)
+    # Determine the number of slices based on the selected axis
+
+    # Iterate over each slice
+    fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 8))
+
+        # Plot image slice
+    ax = axes[0]
+    ax.imshow(img2D, cmap='gray')
+    ax.set_title(f'Image')
+    ax.axis('off')
+
+        # Plot previous mask slice
+    cmap = plt.cm.get_cmap('viridis', 2)
+    cmap.colors[0, 3] = 0
+    ax = axes[1]
+    ax.imshow(img2D, cmap='gray')
+    ax.imshow(prev_masks, cmap=cmap, alpha=0.5)
+    ax.set_title(f'Predict Mask')
+    ax.axis('off')
+
+        # Plot ground truth slice
+    cmap = plt.cm.get_cmap('viridis', 2)
+    cmap.colors[0, 3] = 0
+    ax = axes[2]
+    ax.imshow(img2D, cmap='gray')
+    ax.imshow(gt2D, cmap=cmap, alpha=0.5)
+    ax.set_title(f'Ground Truth')
+    ax.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_path, f'slice_{n}'))
+    plt.close()
 
 class SemanticSeg(object):
     def __init__(self,lr=1e-3,n_epoch=1,channels=3,num_classes=2, input_shape=(384,384),batch_size=6,num_workers=0,
@@ -72,6 +117,48 @@ class SemanticSeg(object):
             RandomFlip2D(mode='hv'),  #7
             To_Tensor(num_class=self.num_classes, input_channel = self.channels)   # 10
         ]
+
+    def plot_eval(self, number_plots, val_path, ckpt_path, log_dir, device):
+        net = copy.deepcopy(self.net)
+        files = os.listdir(ckpt_path)
+        sorted_files = sorted(files)
+        ckpt_file = os.path.join(ckpt_path, sorted_files[-1])
+        state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
+        net.load_state_dict(state_dict)
+        net.eval()
+        net.cuda()
+        plot_path = os.path.join(log_dir, 'plots')
+        os.makedirs(plot_path, exist_ok=True)
+        val_transformer = transforms.Compose([
+            Normalize(),
+            # tio.Resize(target_shape=(24, 128, 128)),
+            # tio.CropOrPad(target_shape=(32, 128, 128)),
+            To_Tensor(num_class=self.num_classes, input_channel=self.channels)
+        ])
+
+        val_dataset = DataGenerator(val_path, num_class=self.num_classes, transform=val_transformer)
+
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True
+        )
+        count = 0
+        with torch.no_grad():
+            for step, sample in enumerate(val_loader):
+                data = sample['image'].squeeze(0)
+                target = sample['label'].squeeze(0)
+
+                data = data.cuda()
+                target = target.cuda()
+                with autocast(self.use_fp16):
+                    output = net(data)
+                    if isinstance(output, tuple):
+                        output = output[0]
+                plot_segmentation2D(data.detach().cpu(), output.detach().cpu(), target.detach().cpu(), plot_path)
+                count += 1
 
     def trainer(self,train_path,val_path,val_ap, cur_fold,output_dir=None,log_dir=None,phase = 'seg'):
 
@@ -140,9 +227,21 @@ class SemanticSeg(object):
 
         while epoch < self.n_epoch:
             train_loss,train_dice,train_run_dice = self._train_on_epoch(epoch,net,loss,optimizer,train_loader,scaler)
+            self.writer.add_scalar(
+                'data/train_loss_epochs', train_loss, epoch
+            )
+            self.writer.add_scalar(
+                'data/train_dice_epochs', train_run_dice, epoch
+            )
 
             if phase == 'seg':
                 val_loss,val_dice,val_run_dice = self._val_on_epoch(epoch,net,loss,val_path)
+                self.writer.add_scalar(
+                    'data/eval_loss_epochs', val_loss, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_dice_epochs', val_run_dice, epoch
+                )
                 score = val_run_dice
             else:
                 ap = self.val(val_ap,net,mode = 'train')
@@ -191,6 +290,7 @@ class SemanticSeg(object):
                 print("Early stopping")
                 break
 
+        self.plot_eval(100, val_path, output_dir, log_dir, device='cuda')
         self.writer.close()
         dfs_remove_weight(output_dir,retain=3)
 
@@ -200,13 +300,13 @@ class SemanticSeg(object):
         train_loss = AverageMeter()
         train_dice = AverageMeter()
 
-        from segmentation.metrics import RunningDice
+        from metrics import RunningDice
         run_dice = RunningDice(labels=range(self.num_classes),ignore_label=-1)
 
         for step,sample in enumerate(train_loader):
 
-            data = sample['ct']
-            target = sample['seg']
+            data = sample['image']
+            target = sample['label']
 
             data = data.cuda()
             target = target.cuda()
@@ -244,9 +344,10 @@ class SemanticSeg(object):
                 print("Category Dice: ", dice_list)
                 print('epoch:{}/{},step:{},train_loss:{:.5f},train_dice:{:.5f},run_dice:{:.5f},lr:{}'.format(epoch,self.n_epoch, step, loss.item(), dice.item(), rundice, optimizer.param_groups[0]['lr']))
                 # run_dice.init_op()
-                self.writer.add_scalars(
-                  'data/train_loss_dice',{'train_loss':loss.item(),'train_dice':dice.item()},self.global_step
+                self.writer.add_scalar(
+                  'data/train_loss',loss.item(),self.global_step
                 )
+                self.writer.add_scalar('data/train_dice', rundice,self.global_step)
 
             self.global_step += 1
 
@@ -258,8 +359,8 @@ class SemanticSeg(object):
 
         val_transformer = transforms.Compose([
             Normalize(),
-            tio.Resize(target_shape=(24, 128, 128)),
-            tio.CropOrPad(target_shape=(32, 128, 128)),
+            # tio.Resize(target_shape=(24, 128, 128)),
+            # tio.CropOrPad(target_shape=(32, 128, 128)),
             To_Tensor(num_class=self.num_classes,input_channel = self.channels)
         ])
 
@@ -276,13 +377,13 @@ class SemanticSeg(object):
         val_loss = AverageMeter()
         val_dice = AverageMeter()
 
-        from segmentation.metrics import RunningDice
+        from metrics import RunningDice
         run_dice = RunningDice(labels=range(self.num_classes),ignore_label=-1)
 
         with torch.no_grad():
             for step,sample in enumerate(val_loader):
-                data = sample['ct']
-                target = sample['seg']
+                data = sample['image']
+                target = sample['label']
 
                 data = data.cuda()
                 target = target.cuda()
@@ -310,8 +411,12 @@ class SemanticSeg(object):
                 if step % 1 == 0:
                     rundice, dice_list = run_dice.compute_dice() 
                     print("Category Dice: ", dice_list)
-                    print('epoch:{}/{},step:{},val_loss:{:.5f},val_dice:{:.5f},run_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss.item(), dice.item(), rundice))
+                    print('Eval epoch:{}/{},step:{},val_loss:{:.5f},val_dice:{:.5f},run_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss.item(), dice.item(), rundice))
                     # run_dice.init_op()
+                    self.writer.add_scalar(
+                        'data/eval_loss', loss.item(), self.global_step
+                    )
+                    self.writer.add_scalar('data/eval_dice', rundice, self.global_step)
 
         return val_loss.avg,val_dice.avg,run_dice.compute_dice()[0]
 

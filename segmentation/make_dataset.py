@@ -36,6 +36,8 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
     for i in range(labels.shape[0]):
         ct = cts[:,i,:,:]
         lab = labels[i,:,:]
+        if lab.max() == 0:
+            continue
 
         hdf5_file = h5py.File(os.path.join(save_path, '%s_%d.hdf5' % (patient_id, i)), 'w')
         hdf5_file.create_dataset('ct', data=ct.astype(np.int16))
