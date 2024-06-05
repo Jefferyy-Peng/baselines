@@ -22,7 +22,7 @@ from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                                       RandomRotate2D, To_Tensor)
 from loss import Deep_Supervised_Loss
 from model import itunet_2d
-from segmentation.MedSAMAuto import MedSAMAUTO
+from MedSAMAuto import MedSAMAUTO
 from utils import dfs_remove_weight, poly_lr
 from monai.networks.nets import SwinUNETR
 import torchio as tio
@@ -113,6 +113,9 @@ class SemanticSeg(object):
                 image_size=512
             )
 
+        for parameter in self.net.image_encoder.parameters():
+            parameter.require_grad = False
+
         if self.pre_trained:
             self._get_pre_trained(self.weight_path,ckpt_point)
 
@@ -162,7 +165,7 @@ class SemanticSeg(object):
                     output = net(data)
                     if isinstance(output, tuple):
                         output = output[0]
-                plot_segmentation2D(data.squeeze(0).permute(1, 2, 0).detach().cpu(), output.squeeze(0)[1].detach().cpu(), target.squeeze(0)[1].detach().cpu(), plot_path, count)
+                plot_segmentation2D(data.squeeze(0).permute(1, 2, 0).detach().cpu(), output.squeeze(0)[0].detach().cpu(), target.squeeze(0)[0].detach().cpu(), plot_path, count)
                 count += 1
 
     def trainer(self,train_path,val_path,val_ap, cur_fold,output_dir=None,log_dir=None,phase = 'seg'):
@@ -225,7 +228,7 @@ class SemanticSeg(object):
 
         scaler = GradScaler()
 
-        early_stopping = EarlyStopping(patience=40,verbose=True,monitor='val_score',op_type='max')
+        early_stopping = EarlyStopping(patience=10,verbose=True,monitor='val_score',op_type='max')
 
         epoch = self.start_epoch
         optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr = lr)
@@ -287,7 +290,7 @@ class SemanticSeg(object):
                 print("Save as: %s" % file_name)
 
                 torch.save(saver,save_path)
-            
+
             epoch += 1
             
             # early stopping
@@ -388,7 +391,7 @@ class SemanticSeg(object):
         with torch.no_grad():
             for step,sample in enumerate(val_loader):
                 data = sample['image']
-                target = sample['label']
+                target = sample['label'][:, 1].unsqueeze(1)
 
                 data = data.cuda()
                 target = target.cuda()
@@ -405,10 +408,8 @@ class SemanticSeg(object):
                 val_loss.update(loss.item(),data.size(0))
                 val_dice.update(dice.item(),data.size(0))
 
-                output = torch.softmax(output,dim=1)
-
-                output = torch.argmax(output,1).detach().cpu().numpy()  #N*H*W 
-                target = torch.argmax(target,1).detach().cpu().numpy()
+                output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  # N*H*W
+                target = target.detach().cpu().numpy()
                 run_dice.update_matrix(target,output)
 
                 torch.cuda.empty_cache()

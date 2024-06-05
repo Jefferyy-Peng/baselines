@@ -6,6 +6,7 @@ import time
 from config import (AP_LIST, CURRENT_FOLD, FOLD_NUM, INIT_TRAINER,
                                  PATH_LIST, SETUP_TRAINER, VERSION)
 from trainer import SemanticSeg
+from sklearn.model_selection import ParameterGrid
 
 
 def get_cross_validation_by_sample(path_list, fold_num, current_fold):
@@ -63,23 +64,45 @@ if __name__ == "__main__":
         segnetwork = SemanticSeg(**INIT_TRAINER)
         print(get_parameter_number(segnetwork.net))
     path_list = PATH_LIST
+    grid_search_params = {
+        "weight_decay": [0.01, 0.001, 0.0001],
+        "lr": [1e-4, 1e-3, 1e-2],
+    }
+
+    param_grid = ParameterGrid(grid_search_params)
     # Training
     ###############################################
     if args.mode == 'train-cross':
-        for current_fold in range(1, FOLD_NUM + 1):
-            print("=== Training Fold ", current_fold, " ===")
-            segnetwork = SemanticSeg(**INIT_TRAINER)
-            print(get_parameter_number(segnetwork.net))
-            train_path, val_path = get_cross_validation_by_sample(path_list, FOLD_NUM, current_fold)
-            train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, current_fold)
-            SETUP_TRAINER['train_path'] = train_path
-            SETUP_TRAINER['val_path'] = val_path
-            SETUP_TRAINER['val_ap'] = val_AP
-            SETUP_TRAINER['cur_fold'] = current_fold
-            start_time = time.time()
-            segnetwork.trainer(**SETUP_TRAINER)
+        for params in param_grid:
+            if params['weight_decay'] == 0.01 and params['lr'] == 1e-4:
+                continue
+            if params['weight_decay'] == 0.001 and params['lr'] == 1e-4:
+                continue
+            GRID_SETUP_TRAINER = SETUP_TRAINER
+            GRID_INIT_TRAINER = INIT_TRAINER
+            for param_name, param in params.items():
+                GRID_SETUP_TRAINER['log_dir'] += f'_{param_name}_{param}'
+                GRID_SETUP_TRAINER['output_dir'] += f'_{param_name}_{param}'
+                if param_name == 'lr':
+                    GRID_INIT_TRAINER['lr'] = param
+                if param_name == 'weight_decay':
+                    GRID_INIT_TRAINER['weight_decay'] = param
+            for current_fold in range(1, FOLD_NUM + 1):
+                if current_fold > 1:
+                    break
+                print("=== Training Fold ", current_fold, " ===")
+                segnetwork = SemanticSeg(**GRID_INIT_TRAINER)
+                print(get_parameter_number(segnetwork.net))
+                train_path, val_path = get_cross_validation_by_sample(path_list, FOLD_NUM, current_fold)
+                train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, current_fold)
+                GRID_SETUP_TRAINER['train_path'] = train_path
+                GRID_SETUP_TRAINER['val_path'] = val_path
+                GRID_SETUP_TRAINER['val_ap'] = val_AP
+                GRID_SETUP_TRAINER['cur_fold'] = current_fold
+                start_time = time.time()
+                segnetwork.trainer(**GRID_SETUP_TRAINER)
 
-            print('run time:%.4f' % (time.time() - start_time))
+                print('run time:%.4f' % (time.time() - start_time))
 
 
     if args.mode == 'train':

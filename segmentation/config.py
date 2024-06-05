@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'TransUNet_empty_images'
+VERSION = 'MedSAMAuto_no_empty_freeze_image_encoder_adam'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -37,7 +37,7 @@ INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
   'batch_size':4,
-  'num_workers':0,
+  'num_workers':12,
   'device':DEVICE,
   'pre_trained':PRE_TRAINED,
   'ckpt_point':CKPT_POINT,
