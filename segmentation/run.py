@@ -66,7 +66,7 @@ if __name__ == "__main__":
         print(get_parameter_number(segnetwork.net))
     path_list = PATH_LIST
     grid_search_params = {
-        "weight_decay": [0.01, 0.001, 0.0001],
+        "weight_decay": [0.001, 0.01, 0.0001],
         "lr": [1e-4, 1e-3, 1e-2],
     }
 
@@ -75,10 +75,10 @@ if __name__ == "__main__":
     ###############################################
     if args.mode == 'train-cross':
         for params in param_grid:
-            if params['weight_decay'] == 0.01 and params['lr'] == 1e-4:
-                continue
-            if params['weight_decay'] == 0.001 and params['lr'] == 1e-4:
-                continue
+            # if params['weight_decay'] == 0.01 and params['lr'] == 1e-4:
+            #     continue
+            # if params['weight_decay'] == 0.001 and params['lr'] == 1e-4:
+            #     continue
             GRID_SETUP_TRAINER = copy.deepcopy(SETUP_TRAINER)
             GRID_INIT_TRAINER = copy.deepcopy(INIT_TRAINER)
             for param_name, param in params.items():
