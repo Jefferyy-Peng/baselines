@@ -4,12 +4,12 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'UNet_empty_images'
+VERSION = 'UNet_no_empty_images_zone'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
 
-DEVICE = '3'
+DEVICE = 'cuda:5'
 # True if use internal pre-trained model
 # Must be True when pre-training and inference
 PRE_TRAINED = False
@@ -22,9 +22,9 @@ CURRENT_FOLD = 5
 GPU_NUM = len(DEVICE.split(','))
 
 #--------------------------------- mode and data path setting
-PATH_DIR = './dataset/segdata/data_2d'
+PATH_DIR = './dataset/zone_segdata/data_2d'
 PATH_LIST = glob.glob(os.path.join(PATH_DIR,'*.hdf5'))
-PATH_AP = './dataset/segdata/data_3d'
+PATH_AP = './dataset/zone_segdata/data_3d'
 AP_LIST = glob.glob(os.path.join(PATH_AP,'*.hdf5'))
 #--------------------------------- 
 
