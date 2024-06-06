@@ -115,7 +115,7 @@ def main(taskname="Task2201_picai_baseline"):
     parser.add_argument('--workdir', type=str, default="../workdir")
     parser.add_argument('--imagesdir', type=str, default=os.environ.get('SM_CHANNEL_IMAGES', "../../picai_baselines/input/images"))
     parser.add_argument('--labelsdir', type=str, default=os.environ.get('SM_CHANNEL_LABELS', "../../picai_baselines/input/picai_labels"))
-    parser.add_argument('--outputdir', type=str, default=os.environ.get('SM_MODEL_DIR', "../output"))
+    parser.add_argument('--outputdir', type=str, default=os.environ.get('SM_MODEL_DIR', "../output_zone"))
 
     args, _ = parser.parse_known_args()
 
@@ -125,7 +125,8 @@ def main(taskname="Task2201_picai_baseline"):
     labels_dir = Path(args.labelsdir)
     output_dir = Path(args.outputdir)
     splits_path = workdir / f"splits/{taskname}/splits.json"
-    annotations_dir = labels_dir / "csPCa_lesion_delineations/human_expert/resampled"
+    # annotations_dir = labels_dir / "csPCa_lesion_delineations/human_expert/resampled"
+    annotations_dir = labels_dir / "anatomical_delineations/zonal_pz_tz/AI/HeviAI23"
 
     workdir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)

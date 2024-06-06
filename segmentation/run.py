@@ -1,4 +1,5 @@
 import argparse
+import copy
 import os
 import random
 import time
@@ -78,8 +79,8 @@ if __name__ == "__main__":
                 continue
             if params['weight_decay'] == 0.001 and params['lr'] == 1e-4:
                 continue
-            GRID_SETUP_TRAINER = SETUP_TRAINER
-            GRID_INIT_TRAINER = INIT_TRAINER
+            GRID_SETUP_TRAINER = copy.deepcopy(SETUP_TRAINER)
+            GRID_INIT_TRAINER = copy.deepcopy(INIT_TRAINER)
             for param_name, param in params.items():
                 GRID_SETUP_TRAINER['log_dir'] += f'_{param_name}_{param}'
                 GRID_SETUP_TRAINER['output_dir'] += f'_{param_name}_{param}'
