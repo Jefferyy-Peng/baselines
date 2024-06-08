@@ -154,7 +154,8 @@ class DataGenerator(Dataset):
         seg = torch.Tensor(hdf5_reader(self.path_list[index], 'seg')).unsqueeze(0)
         transform = transforms.Resize(size=(1024, 1024))
         ct = transform(ct).numpy()
-        seg = transform(seg).squeeze(0).numpy()
+        seg_transform = transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)
+        seg = seg_transform(seg).squeeze(0).numpy()
 
         sample = {'ct': ct, 'seg': seg}
         # Transform

@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'MedSAMAuto_no_empty_freeze_image_encoder_adam_gland'
+VERSION = 'MedSAMAuto_no_empty_freeze_image_encoder_adam_gland_corrected'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
