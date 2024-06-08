@@ -36,9 +36,9 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
     for i in range(labels.shape[0]):
         ct = cts[:,i,:,:]
         lab = labels[i,:,:]
-        if lab.max() <= 1:
+        if 2 not in np.unique(lab) or 1 not in np.unique(lab):
             continue
-        if lab.max() == 2:
+        else:
             new_lab = np.zeros((2, 384, 384)).astype(int)
             new_lab[0][lab == 1] = 1
             new_lab[1][lab == 2] = 1
