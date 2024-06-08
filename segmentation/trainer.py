@@ -314,7 +314,7 @@ class SemanticSeg(object):
         for step,sample in enumerate(train_loader):
 
             data = sample['image']
-            target = sample['label'][:, 1].unsqueeze(1)
+            target = sample['label']
 
             data = data.cuda()
             target = target.cuda()
@@ -323,7 +323,7 @@ class SemanticSeg(object):
                 output = net(data)
                 if isinstance(output,tuple):
                     output = output[0]
-                loss = criterion(output,target)
+                loss = criterion(output[:, 0],target[:, 0]) + criterion(output[:, 1],target[:, 1])
 
             optimizer.zero_grad()
             if self.use_fp16:
@@ -391,7 +391,7 @@ class SemanticSeg(object):
         with torch.no_grad():
             for step,sample in enumerate(val_loader):
                 data = sample['image']
-                target = sample['label'][:, 1].unsqueeze(1)
+                target = sample['label']
 
                 data = data.cuda()
                 target = target.cuda()
@@ -399,7 +399,7 @@ class SemanticSeg(object):
                     output = net(data)
                     if isinstance(output,tuple):
                         output = output[0]
-                loss = criterion(output,target)
+                loss = criterion(output[:, 0],target[:, 0]) + criterion(output[:, 1],target[:, 1])
 
                 output = output.float()
                 loss = loss.float()
@@ -619,14 +619,11 @@ def compute_dice(predict,target,ignore_index=0):
         mean dice over the batch
     """
     assert predict.shape == target.shape, 'predict & target shape do not match'
-    predict = (F.sigmoid(predict) > 0.5).int()
+    predict = F.sigmoid(predict)
+    pred_label = (predict > 0.5).int()
+
+    dice_1 = 2 * (pred_label[:, 0] * target[:, 0]).sum() / (pred_label[:, 0].sum() + target[:, 0].sum())
+
+    dice_2 = 2 * (pred_label[:, 1] * target[:, 1]).sum() / (pred_label[:, 1].sum() + target[:, 1].sum())
     
-    dice_list = np.ones(2,dtype=np.float32)
-    for i in range(2):
-        if i != ignore_index:
-            if i not in predict and i not in target:
-                continue
-            dice = binary_dice((predict==i).float(), (target==i).float())
-            dice_list[i] = round(dice.item(),4)
-    
-    return np.nanmean(dice_list[1:])
+    return (dice_1 + dice_2) / 2

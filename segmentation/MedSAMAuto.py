@@ -50,7 +50,7 @@ class MedSAMAUTO(nn.Module):
             image_pe=self.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
             sparse_prompt_embeddings=sparse_embeddings_none,  # (B, 2, 256)
             dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
-            multimask_output=False,
+            multimask_output=True,
         )
         # print(image_embedding.shape, dense_embeddings.shape, low_res_masks.shape)
 
@@ -63,4 +63,4 @@ class MedSAMAUTO(nn.Module):
 
         # print(ori_res_masks.shape)
 
-        return ori_res_masks
+        return ori_res_masks[:, :2]
