@@ -400,8 +400,6 @@ class SemanticSeg(object):
                 val_loss.update(loss.item(),data.size(0))
                 val_dice.update(dice.item(),data.size(0))
 
-                output = torch.softmax(output,dim=1)
-
                 output = (output>0.5).int().detach().cpu().numpy()  #N*H*W
                 target = target.detach().cpu().numpy()
                 run_dice.update_matrix(target,output)
