@@ -135,7 +135,7 @@ class SemanticSeg(object):
         state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
         net.load_state_dict(state_dict)
         net.eval()
-        net.cuda()
+        net.to(self.device)
         plot_path = os.path.join(log_dir, 'plots')
         os.makedirs(plot_path, exist_ok=True)
         val_transformer = transforms.Compose([
@@ -159,8 +159,8 @@ class SemanticSeg(object):
                 data = sample['image']
                 target = sample['label']
 
-                data = data.cuda()
-                target = target.cuda()
+                data = data.to(self.device)
+                target = target.to(self.device)
                 with autocast(self.use_fp16):
                     output = net(data)
                     if isinstance(output, tuple):
@@ -220,8 +220,8 @@ class SemanticSeg(object):
         )
 
         # copy to gpu
-        net = net.cuda()
-        loss = loss.cuda()
+        net = net.to(self.device)
+        loss = loss.to(self.device)
 
         # optimizer setting
         optimizer = torch.optim.Adam(net.parameters(),lr=lr,weight_decay=self.weight_decay)
@@ -316,8 +316,8 @@ class SemanticSeg(object):
             data = sample['image']
             target = sample['label'][:, 1].unsqueeze(1)
 
-            data = data.cuda()
-            target = target.cuda()
+            data = data.to(self.device)
+            target = target.to(self.device)
 
             with autocast(self.use_fp16):
                 output = net(data)
@@ -393,8 +393,8 @@ class SemanticSeg(object):
                 data = sample['image']
                 target = sample['label'][:, 1].unsqueeze(1)
 
-                data = data.cuda()
-                target = target.cuda()
+                data = data.to(self.device)
+                target = target.to(self.device)
                 with autocast(self.use_fp16):
                     output = net(data)
                     if isinstance(output,tuple):
@@ -430,7 +430,7 @@ class SemanticSeg(object):
     def val(self,val_path,net = None,val_transformer=None,mode = 'val'):
         if net is None:
             net = self.net
-            net = net.cuda()
+            net = net.to(self.device)
         net.eval()
 
         class Normalize_2d(object):
@@ -466,8 +466,8 @@ class SemanticSeg(object):
                 target = sample['label']
                 
                 data = data.squeeze().transpose(1,0) 
-                data = data.cuda()
-                target = target.cuda()
+                data = data.to(self.device)
+                target = target.to(self.device)
                 with autocast(self.use_fp16):
                     output = net(data)
                     if isinstance(output,tuple):
