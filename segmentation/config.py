@@ -9,7 +9,7 @@ VERSION = 'MedSAMAuto_no_empty_freeze_image_encoder_adam_zone'
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
 
-DEVICE = '3'
+DEVICE = 'cuda:7'
 # True if use internal pre-trained model
 # Must be True when pre-training and inference
 PRE_TRAINED = False
@@ -36,7 +36,7 @@ print(WEIGHT_PATH)
 INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
-  'batch_size':4,
+  'batch_size':1,
   'num_workers':12,
   'device':DEVICE,
   'pre_trained':PRE_TRAINED,
