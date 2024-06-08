@@ -333,8 +333,8 @@ class SemanticSeg(object):
             train_loss.update(loss.item(),data.size(0))
             train_dice.update(dice.item(),data.size(0))
             
-            output = torch.argmax(torch.softmax(output,dim=1),1).detach().cpu().numpy()  #N*H*W 
-            target = torch.argmax(target,1).detach().cpu().numpy()
+            output = (torch.sigmoid(output)>0.5).int().detach().cpu().numpy()  #N*H*W
+            target = target.detach().cpu().numpy()
             run_dice.update_matrix(target,output)
 
             torch.cuda.empty_cache()
@@ -613,17 +613,23 @@ def compute_dice(predict,target,ignore_index=0):
         mean dice over the batch
     """
     assert predict.shape == target.shape, 'predict & target shape do not match'
-    predict = F.softmax(predict, dim=1)
+    predict = F.sigmoid(predict)
     
     onehot_predict = torch.argmax(predict,dim=1)#N*H*W
     onehot_target = torch.argmax(target,dim=1) #N*H*W
 
-    dice_list = np.ones((target.shape[1]),dtype=np.float32)
-    for i in range(target.shape[1]):
-        if i != ignore_index:
-            if i not in onehot_predict and i not in onehot_target:
-                continue
-            dice = binary_dice((onehot_predict==i).float(), (onehot_target==i).float())
-            dice_list[i] = round(dice.item(),4)
+    pred_label = (predict > 0.5).int()
+
+    dice_1 = 2 * (pred_label[:, 0] * target[:, 0]).sum() / (pred_label[:, 0].sum() + target[:, 0].sum())
+
+    dice_2 = 2 * (pred_label[:, 1] * target[:, 1]).sum() / (pred_label[:, 1].sum() + target[:, 1].sum())
+
+    # dice_list = np.ones((target.shape[1]),dtype=np.float32)
+    # for i in range(target.shape[1]):
+    #     if i != ignore_index:
+    #         if i not in onehot_predict and i not in onehot_target:
+    #             continue
+    #         dice = binary_dice((onehot_predict==i).float(), (onehot_target==i).float())
+    #         dice_list[i] = round(dice.item(),4)
     
-    return np.nanmean(dice_list[1:])
+    return (dice_1 + dice_2) / 2

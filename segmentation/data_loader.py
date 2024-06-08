@@ -42,7 +42,8 @@ class RandomRotate2D(object):
         cts = []
         for i in range(ct_image.shape[0]):
             cts.append(Image.fromarray(ct_image[i]))
-        label = Image.fromarray(np.uint8(label))
+        # label = Image.fromarray(np.uint8(label))
+        labels = [Image.fromarray(label[i]) for i in range(label.shape[0])]
 
         rotate_degree = random.choice(self.degree)
 
@@ -52,10 +53,15 @@ class RandomRotate2D(object):
             ct = np.array(ct).astype(np.float32)
             cts_out.append(ct)
 
-        label = label.rotate(rotate_degree, Image.NEAREST)
+        labels_out = []
+        for label in labels:
+            label = label.rotate(rotate_degree, Image.NEAREST)
+            label = np.array(label).astype(np.float32)
+            labels_out.append(label)
 
         ct_image = np.asarray(cts_out)
-        label = np.array(label).astype(np.float32)
+        label = np.asarray(labels_out).astype(np.float32)
+        # label = np.array(label).astype(np.float32)
         return {'ct': ct_image, 'seg': label}
 
 
@@ -81,20 +87,20 @@ class RandomFlip2D(object):
             random_factor = np.random.uniform(0, 1)
             if random_factor < 0.3:
                 ct_image = ct_image[:, :, ::-1]
-                label = label[:, ::-1]
+                label = label[:, :, ::-1]
             elif random_factor < 0.6:
                 ct_image = ct_image[:, ::-1, :]
-                label = label[::-1, :]
+                label = label[:, ::-1, :]
 
         elif 'h' in self.mode:
             if np.random.uniform(0, 1) > 0.5:
                 ct_image = ct_image[:, :, ::-1]
-                label = label[:, ::-1]
+                label = label[:,:, ::-1]
 
         elif 'v' in self.mode:
             if np.random.uniform(0, 1) > 0.5:
                 ct_image = ct_image[:, ::-1, :]
-                label = label[::-1, :]
+                label = label[:,::-1, :]
 
         ct_image = ct_image.copy()
         label = label.copy()
@@ -116,16 +122,16 @@ class To_Tensor(object):
         ct = sample['ct']
         seg = sample['seg']
 
-        new_image = ct[:self.channel, ...]
-        new_label = np.empty((self.num_class,) + seg.shape, dtype=np.float32)
-        for z in range(1, self.num_class):
-            temp = (seg == z).astype(np.float32)
-            new_label[z, ...] = temp
-        new_label[0, ...] = np.amax(new_label[1:, ...], axis=0) == 0
+        # new_image = ct[:self.channel, ...]
+        # new_label = np.empty(seg.shape, dtype=np.float32)
+        # for z in range(1, self.num_class):
+        #     temp = (seg == z).astype(np.float32)
+        #     new_label[z, ...] = temp
+        # new_label[0, ...] = np.amax(new_label[1:, ...], axis=0) == 0
 
         # convert to Tensor
-        new_sample = {'image': torch.from_numpy(new_image),
-                      'label': torch.from_numpy(new_label)}
+        new_sample = {'image': torch.from_numpy(ct),
+                      'label': torch.from_numpy(seg)}
 
         return new_sample
 

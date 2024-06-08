@@ -5,7 +5,7 @@ import torch.nn.functional as F
 class FocalLoss(nn.Module):
     """Focal loss function for binary segmentation."""
 
-    def __init__(self, alpha=1, gamma=2, num_classes=2, reduction="sum"):
+    def __init__(self, alpha=0.99, gamma=2, num_classes=2, reduction="sum"):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -13,22 +13,25 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
-        inputs = torch.softmax(inputs,dim=1)
-        ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
+        inputs = torch.sigmoid(inputs)
+        ce_loss_1 = F.binary_cross_entropy(inputs[:, 0], targets[:, 0], reduction="none")
+        ce_loss_2 = F.binary_cross_entropy(inputs[:, 1], targets[:, 1], reduction="none")
 
-        p_t = (inputs * targets) + ((1 - inputs) * (1 - targets))
-        loss = ce_loss * ((1 - p_t) ** self.gamma)
+        pt_1 = torch.exp(-ce_loss_1)
+        pt_2 = torch.exp(-ce_loss_2)
 
-        if self.alpha >= 0:
-            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-            loss = alpha_t * loss
+        loss_1 = self.alpha * (1 - pt_1) ** self.gamma * ce_loss_1
+        loss_2 = self.alpha * (1 - pt_2) ** self.gamma * ce_loss_2
 
         if self.reduction == "mean":
-            loss = loss.mean()
-        elif self.reduction == "sum":
-            loss = loss.sum()
+            loss_1 = loss_1.mean()
+            loss_2 = loss_2.mean()
+            return (loss_1 + loss_2) / 2
 
-        return loss
+        elif self.reduction == "sum":
+            loss_1 = loss_1.sum()
+            loss_2 = loss_2.sum()
+            return loss_1 + loss_2
 
 class Deep_Supervised_Loss(nn.Module):
     def __init__(self):
