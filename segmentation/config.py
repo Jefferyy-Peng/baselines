@@ -36,7 +36,7 @@ print(WEIGHT_PATH)
 INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
-  'batch_size':1,
+  'batch_size':4,
   'num_workers':12,
   'device':DEVICE,
   'pre_trained':PRE_TRAINED,
