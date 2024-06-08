@@ -315,7 +315,7 @@ class SemanticSeg(object):
                 output = net(data)
                 if isinstance(output,tuple):
                     output = output[0]
-                loss = criterion(output,target)
+                loss = criterion(output[:, 0],target[:, 0]) + criterion(output[:, 1],target[:, 1])
 
             optimizer.zero_grad()
             if self.use_fp16:
@@ -333,7 +333,7 @@ class SemanticSeg(object):
             train_loss.update(loss.item(),data.size(0))
             train_dice.update(dice.item(),data.size(0))
             
-            output = (torch.sigmoid(output)>0.5).int().detach().cpu().numpy()  #N*H*W
+            output = (output>0.5).int().detach().cpu().numpy()  #N*H*W
             target = target.detach().cpu().numpy()
             run_dice.update_matrix(target,output)
 
@@ -391,7 +391,7 @@ class SemanticSeg(object):
                     output = net(data)
                     if isinstance(output,tuple):
                         output = output[0]
-                loss = criterion(output,target)
+                loss = criterion(output[:, 0],target[:, 0]) + criterion(output[:, 1],target[:, 1])
 
                 output = output.float()
                 loss = loss.float()
@@ -402,8 +402,8 @@ class SemanticSeg(object):
 
                 output = torch.softmax(output,dim=1)
 
-                output = torch.argmax(output,1).detach().cpu().numpy()  #N*H*W 
-                target = torch.argmax(target,1).detach().cpu().numpy()
+                output = (output>0.5).int().detach().cpu().numpy()  #N*H*W
+                target = target.detach().cpu().numpy()
                 run_dice.update_matrix(target,output)
 
                 torch.cuda.empty_cache()
@@ -613,10 +613,6 @@ def compute_dice(predict,target,ignore_index=0):
         mean dice over the batch
     """
     assert predict.shape == target.shape, 'predict & target shape do not match'
-    predict = F.sigmoid(predict)
-    
-    onehot_predict = torch.argmax(predict,dim=1)#N*H*W
-    onehot_target = torch.argmax(target,dim=1) #N*H*W
 
     pred_label = (predict > 0.5).int()
 
