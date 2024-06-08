@@ -13,22 +13,19 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
-        inputs = torch.softmax(inputs,dim=1)
-        ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
+        inputs = torch.sigmoid(inputs)
+        BCE_loss = F.binary_cross_entropy(inputs, targets, reduction='none')
 
-        p_t = (inputs * targets) + ((1 - inputs) * (1 - targets))
-        loss = ce_loss * ((1 - p_t) ** self.gamma)
+        # Compute the focal loss
+        pt = torch.exp(-BCE_loss)
+        F_loss = self.alpha * (1 - pt) ** self.gamma * BCE_loss
 
-        if self.alpha >= 0:
-            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-            loss = alpha_t * loss
-
-        if self.reduction == "mean":
-            loss = loss.mean()
-        elif self.reduction == "sum":
-            loss = loss.sum()
-
-        return loss
+        if self.reduction == 'mean':
+            return F_loss.mean()
+        elif self.reduction == 'sum':
+            return F_loss.sum()
+        else:
+            return F_loss
 
 class Deep_Supervised_Loss(nn.Module):
     def __init__(self):
