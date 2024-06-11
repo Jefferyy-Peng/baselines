@@ -183,8 +183,8 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
     os.makedirs(save_path, exist_ok=True)
     # Determine the number of slices based on the selected axis
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 8))
-    image_pred = add_contour(img2D, lesion_prev_masks, zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks)
-    image_gt = add_contour(img2D, lesion_gt2D[1].unsqueeze(0), zone_gt2D[0], zone_gt2D[1], gland_gt2D[1].unsqueeze(0))
+    image_pred = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks)
+    image_gt = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D[1].unsqueeze(0), zone_gt2D[0], zone_gt2D[1], gland_gt2D[1].unsqueeze(0))
     axes[0].imshow(image_pred)
     axes[0].set_title('predicted results')
     axes[1].imshow(image_gt)
