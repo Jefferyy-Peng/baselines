@@ -1,4 +1,6 @@
 import os
+import pickle
+
 import SimpleITK as sitk
 import pandas as pd
 from tqdm import tqdm
@@ -36,13 +38,15 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
     for i in range(labels.shape[0]):
         ct = cts[:,i,:,:]
         lab = labels[i,:,:]
-        if 2 not in np.unique(lab) or 1 not in np.unique(lab):
+        # if 2 not in np.unique(lab) or 1 not in np.unique(lab):
+        #     continue
+        # else:
+        #     new_lab = np.zeros((2, 384, 384)).astype(int)
+        #     new_lab[0][lab == 1] = 1
+        #     new_lab[1][lab == 2] = 1
+        #     lab = new_lab
+        if lab.max() < 1:
             continue
-        else:
-            new_lab = np.zeros((2, 384, 384)).astype(int)
-            new_lab[0][lab == 1] = 1
-            new_lab[1][lab == 2] = 1
-            lab = new_lab
 
         hdf5_file = h5py.File(os.path.join(save_path, '%s_%d.hdf5' % (patient_id, i)), 'w')
         hdf5_file.create_dataset('ct', data=ct.astype(np.int16))
@@ -65,8 +69,9 @@ def make_segdata(base_dir,label_dir,output_dir):
     count = 0
 
     pathlist = ['_'.join(path.split('_')[:2]) for path in os.listdir(base_dir)]
-    pathlist = list(set(pathlist))
+    pathlist = sorted(list(set(pathlist)))
     print(len(pathlist))
+    pid_dict = {}
 
 
     for id, path in enumerate(tqdm(pathlist)):
@@ -77,6 +82,7 @@ def make_segdata(base_dir,label_dir,output_dir):
         seg_image = sitk.GetArrayFromImage(seg).astype(np.uint8)
         # seg_image[seg_image>=2] = 1
         if np.max(seg_image) == 0:
+            count += 1
             continue
 
         in_1 = sitk.ReadImage(os.path.join(base_dir,path + '_0000.nii.gz'))
@@ -93,11 +99,13 @@ def make_segdata(base_dir,label_dir,output_dir):
         save_as_hdf5(img,hdf5_path,'ct')
         save_as_hdf5(seg_image,hdf5_path,'seg')
 
+        pid_dict[count] = path
         store_images_labels_2d(data_dir_2d,count,img,seg_image)
 
         count += 1
 
     print(count)
+    pickle.dump(pid_dict, open('./lesion_pid.p', 'wb'))
 
 def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
 
@@ -184,9 +192,9 @@ def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
 
 if __name__ == "__main__":
     phase = 'seg'
-    base_dir = '../output_zone/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
-    label_dir = '../output_zone/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
-    output_dir = './dataset/zone_segdata'
+    base_dir = '../output/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
+    label_dir = '../output/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
+    output_dir = './dataset/segdata_test'
     test_dir = 'path/to/nnUNet_test_data'
     seg_dir = 'path/to/segmentation_result'
     csv_path = 'path/to/classification_result'
