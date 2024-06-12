@@ -137,12 +137,26 @@ def plot_eval(net, val_path, ckpt_path, log_dir, device):
             plot_segmentation2D(data.squeeze(0).permute(1, 2, 0).detach().cpu(), output.squeeze(0)[0].detach().cpu(), target.squeeze(0)[0].detach().cpu(), plot_path, count)
             count += 1
 
+def compute_dice(predict, target):
+    """
+    Compute dice
+    Args:
+        predict: A tensor of shape [N, C, *]
+        target: A tensor of same shape with predict
+        ignore_index: class index to ignore
+    Return:
+        mean dice over the batch
+    """
+    assert predict.shape == target.shape, 'predict & target shape do not match'
 
+    dice = 2 * (predict * target).sum() / (predict.sum() + target.sum())
+
+    return dice
 def add_contour(original_image, mask_lesion, mask_pz, mask_cz, mask_gland, random_color=False, contour_thickness=2,):
-    color1 = np.array([255, 0, 0, 0.9]) # Red
-    color2 = np.array([0, 255, 0, 0.9]) # Green
-    color3 = np.array([0, 0, 255, 0.9]) # Blue
-    color4 = np.array([255, 255, 0, 0.9]) # yellow
+    color1 = np.array([240, 128, 128, 0.9])  # Red
+    color2 = np.array([144, 238, 144, 0.9])  # Green
+    color3 = np.array([221, 160, 221, 0.9])  # Blue
+    color4 = np.array([173, 216, 230, 0.9])  # yellow
     # Create a copy to avoid altering the original image
     image_copy = copy.copy(original_image).detach().cpu().numpy()
     image_copy = np.ascontiguousarray((image_copy * 255).astype(np.uint8))
@@ -184,6 +198,11 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 8))
     image_pred = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks[1], zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks[1])
     image_gt = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D[1].squeeze(0), zone_gt2D.squeeze(0)[0], zone_gt2D.squeeze(0)[1], gland_gt2D[1].squeeze(0))
+    lesion_dice = compute_dice(lesion_prev_masks[1].int(), lesion_gt2D[1].squeeze(0))
+    pz_dice = compute_dice(zone_prev_masks[0].int(), zone_gt2D.squeeze(0)[0])
+    tz_dice = compute_dice(zone_prev_masks[1].int(), zone_gt2D.squeeze(0)[1])
+    gland_dice = compute_dice(gland_prev_masks[1].int(), gland_gt2D[1].squeeze(0))
+    fig.suptitle(f'lesion_dice: {lesion_dice}, pz_dice: {pz_dice}, tz_dice: {tz_dice}, gland_dice: {gland_dice}')
     axes[0].imshow(image_pred)
     axes[0].set_title('predicted results')
     axes[1].imshow(image_gt)
