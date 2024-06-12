@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'UNet_no_empty_images_gland'
+VERSION = 'UNet_no_empty_images_test'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
