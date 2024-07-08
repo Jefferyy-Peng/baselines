@@ -81,9 +81,9 @@ def make_segdata(base_dir,label_dir,output_dir):
 
         seg_image = sitk.GetArrayFromImage(seg).astype(np.uint8)
         # seg_image[seg_image>=2] = 1
-        if np.max(seg_image) == 0:
-            count += 1
-            continue
+        # if np.max(seg_image) == 0:
+        #     count += 1
+        #     continue
 
         in_1 = sitk.ReadImage(os.path.join(base_dir,path + '_0000.nii.gz'))
         in_2 = sitk.ReadImage(os.path.join(base_dir,path + '_0001.nii.gz'))
@@ -105,7 +105,7 @@ def make_segdata(base_dir,label_dir,output_dir):
         count += 1
 
     print(count)
-    pickle.dump(pid_dict, open('./lesion_pid.p', 'wb'))
+    pickle.dump(pid_dict, open(os.path.join(output_dir ,'lesion_pid.p'), 'wb'))
 
 def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
 
@@ -192,9 +192,9 @@ def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
 
 if __name__ == "__main__":
     phase = 'seg'
-    base_dir = '../output/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
-    label_dir = '../output/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
-    output_dir = './dataset/segdata_test'
+    base_dir = '../output_lesion_human/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
+    label_dir = '../output_lesion_human/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
+    output_dir = './dataset/lesion_segdata_human_all'
     test_dir = 'path/to/nnUNet_test_data'
     seg_dir = 'path/to/segmentation_result'
     csv_path = 'path/to/classification_result'

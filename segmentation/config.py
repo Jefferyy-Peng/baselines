@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'MedSAMAuto_no_empty_freeze_image_encoder_adam_gland_corrected'
+VERSION = 'MedSAMAuto_test'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -22,7 +22,7 @@ CURRENT_FOLD = 5
 GPU_NUM = len(DEVICE.split(','))
 
 #--------------------------------- mode and data path setting
-PATH_DIR = './dataset/gland_segdata/data_2d'
+PATH_DIR = './dataset/lesion_segdata_AI/data_2d'
 PATH_LIST = glob.glob(os.path.join(PATH_DIR,'*.hdf5'))
 PATH_AP = './dataset/gland_segdata/data_3d'
 AP_LIST = glob.glob(os.path.join(PATH_AP,'*.hdf5'))
@@ -36,7 +36,7 @@ print(WEIGHT_PATH)
 INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
-  'batch_size':4,
+  'batch_size':1,
   'num_workers':12,
   'device':DEVICE,
   'pre_trained':PRE_TRAINED,

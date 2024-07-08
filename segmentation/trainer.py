@@ -1,6 +1,7 @@
 import copy
 import math
 import os
+import pickle
 import shutil
 import warnings
 
@@ -19,10 +20,12 @@ from segment_anything import sam_model_registry
 from model_single import ModelEmb
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
-                                      RandomRotate2D, To_Tensor)
+                         RandomRotate2D, To_Tensor, MultiLevelDataGenerator)
 from loss import Deep_Supervised_Loss
 from model import itunet_2d
-from MedSAMAuto import MedSAMAUTO
+from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI
+from segmentation.config import PATH_DIR
+from segmentation.segment_anything.modeling import MaskDecoder, TwoWayTransformer
 from utils import dfs_remove_weight, poly_lr
 from monai.networks.nets import SwinUNETR
 import torchio as tio
@@ -105,16 +108,26 @@ class SemanticSeg(object):
 
         sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
         dense_model = ModelEmb()
-        self.net = MedSAMAUTO(
+        multi_mask_decoder = MaskDecoder(
+            num_multimask_outputs=4,
+            transformer=TwoWayTransformer(
+                depth=2,
+                embedding_dim=256,
+                mlp_dim=2048,
+                num_heads=8,
+            ),
+            transformer_dim=256,
+            iou_head_depth=3,
+            iou_head_hidden_dim=256,
+        )
+        self.net = MedSAMAUTOMULTI(
                 image_encoder=sam_model.image_encoder,
-                mask_decoder=sam_model.mask_decoder,
+                mask_decoder=multi_mask_decoder,
                 prompt_encoder=sam_model.prompt_encoder,
                 dense_encoder=dense_model,
                 image_size=512
             )
 
-        for parameter in self.net.image_encoder.parameters():
-            parameter.require_grad = False
 
         if self.pre_trained:
             self._get_pre_trained(self.weight_path,ckpt_point)
@@ -209,7 +222,11 @@ class SemanticSeg(object):
         # dataloader setting
         train_transformer = transforms.Compose(self.train_transform)
 
-        train_dataset = DataGenerator(train_path,num_class=self.num_classes,transform=train_transformer)
+
+        lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
+        zone_pid = pickle.load(open('./dataset/zone_segdata/zone_pid.p', 'rb'))
+        gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
+        train_dataset = MultiLevelDataGenerator(train_path,num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
 
         train_loader = DataLoader(
           train_dataset,
@@ -217,6 +234,20 @@ class SemanticSeg(object):
           shuffle=True,
           num_workers=self.num_workers,
           pin_memory=True
+        )
+        val_transformer = transforms.Compose([
+            Normalize(),
+            # tio.Resize(target_shape=(24, 128, 128)),
+            # tio.CropOrPad(target_shape=(32, 128, 128)),
+            To_Tensor(num_class=self.num_classes, input_channel=self.channels)
+        ])
+        val_dataset = MultiLevelDataGenerator(val_path, num_class=self.num_classes,transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True
         )
 
         # copy to gpu
@@ -234,23 +265,36 @@ class SemanticSeg(object):
         optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr = lr)
 
         while epoch < self.n_epoch:
-            train_loss,train_dice,train_run_dice = self._train_on_epoch(epoch,net,loss,optimizer,train_loader,scaler)
+            train_loss,gland_train_dice,zone_train_dice,lesion_train_dice = self._train_on_epoch(epoch,net,loss,optimizer,train_loader,scaler)
             self.writer.add_scalar(
-                'data/train_loss_epochs', train_loss, epoch
+                'data/train_loss', train_loss, epoch
             )
-            self.writer.add_scalar(
-                'data/train_dice_epochs', train_run_dice, epoch
-            )
+            self.writer.add_scalar('data/gland_train_dice', gland_train_dice, epoch)
+            self.writer.add_scalar('data/zone_train_dice', zone_train_dice, epoch)
+            self.writer.add_scalar('data/lesion_train_dice', lesion_train_dice, epoch)
+
+            # self.writer.add_scalar(
+            #     'data/train_loss_epochs', train_loss, epoch
+            # )
+            # self.writer.add_scalar(
+            #     'data/train_dice_epochs', train_run_dice, epoch
+            # )
 
             if phase == 'seg':
-                val_loss,val_dice,val_run_dice = self._val_on_epoch(epoch,net,loss,val_path)
+                val_loss,gland_val_dice,zone_val_dice,lesion_val_dice = self._val_on_epoch(epoch,net,loss,val_loader)
                 self.writer.add_scalar(
                     'data/eval_loss_epochs', val_loss, epoch
                 )
                 self.writer.add_scalar(
-                    'data/eval_dice_epochs', val_run_dice, epoch
+                    'data/eval_gland_dice_epochs', gland_val_dice, epoch
                 )
-                score = val_run_dice
+                self.writer.add_scalar(
+                    'data/eval_zone_dice_epochs', zone_val_dice, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_lesion_dice_epochs', lesion_val_dice, epoch
+                )
+                score = (gland_val_dice + zone_val_dice + lesion_val_dice) / 3
             else:
                 ap = self.val(val_ap,net,mode = 'train')
                 score = ap.score + 0.02*train_run_dice
@@ -281,8 +325,8 @@ class SemanticSeg(object):
                 }
                 
                 if phase == 'seg':
-                    file_name = 'epoch:{}-train_loss:{:.5f}-train_dice:{:.5f}-train_run_dice:{:.5f}-val_loss:{:.5f}-val_dice:{:.5f}-val_run_dice:{:.5f}.pth'.format(
-                    epoch,train_loss,train_dice,train_run_dice,val_loss,val_dice,val_run_dice) 
+                    file_name = 'epoch:{}-train_loss:{:.5f}-gland_train_dice:{:.5f}-zone_train_dice:{:.5f}-lesion_train_dice:{:.5f}-val_loss:{:.5f}-gland_val_dice:{:.5f}-zone_val_dice:{:.5f}-lesion_val_dice:{:.5f}.pth'.format(
+                    epoch,train_loss,gland_train_dice,zone_train_dice,lesion_train_dice,val_loss,gland_val_dice,zone_val_dice,lesion_val_dice)
                 else:
                     file_name = 'epoch:{}-train_loss:{:.5f}-train_dice:{:.5f}-train_run_dice:{:.5f}-val_auroc:{:.5f}-val_ap:{:.5f}-val_score:{:.5f}.pth'.format(
                     epoch,train_loss,train_dice,train_run_dice,ap.auroc,ap.AP,ap.score)
@@ -306,24 +350,39 @@ class SemanticSeg(object):
         net.train()
 
         train_loss = AverageMeter()
-        train_dice = AverageMeter()
+        gland_train_dice = AverageMeter()
+        zone_train_dice = AverageMeter()
+        lesion_train_dice = AverageMeter()
 
         from metrics import RunningDice
         run_dice = RunningDice(labels=range(self.num_classes),ignore_label=-1)
 
-        for step,sample in enumerate(train_loader):
-
-            data = sample['image']
-            target = sample['label'][:, 1].unsqueeze(1)
+        for step, (sample, pid, slice) in enumerate(train_loader):
+            lesion_targets = []
+            zone_targets = []
+            gland_targets = []
+            for name, value in sample.items():
+                if name == 'ct':
+                    data = value
+                elif 'lesion' in name:
+                    lesion_targets.append(value)
+                elif 'gland' in name:
+                    gland_targets.append(value)
+                elif 'zone' in name:
+                    zone_targets.append(value)
+            lesion_target = torch.stack(lesion_targets)
+            zone_target = torch.stack(zone_targets)
+            gland_target = torch.stack(gland_targets)
+            multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).permute(1, 0, 2, 3)
 
             data = data.to(self.device)
-            target = target.to(self.device)
+            multi_level_targets = multi_level_targets.to(self.device)
 
             with autocast(self.use_fp16):
                 output = net(data)
                 if isinstance(output,tuple):
                     output = output[0]
-                loss = criterion(output,target)
+                loss = criterion(output,multi_level_targets)
 
             optimizer.zero_grad()
             if self.use_fp16:
@@ -337,94 +396,99 @@ class SemanticSeg(object):
             output = output.float()
             loss = loss.float()
 
-            dice = compute_dice(output.detach(),target)
+            dice = compute_dice(output.detach(),multi_level_targets)
             train_loss.update(loss.item(),data.size(0))
-            train_dice.update(dice.item(),data.size(0))
-            
-            output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  #N*H*W
-            target = target.detach().cpu().numpy()
-            run_dice.update_matrix(target,output)
+            gland_train_dice.update(dice[0],data.size(0))
+            zone_train_dice.update(sum(dice[1:3]) / 2, data.size(0))
+            lesion_train_dice.update(dice[3], data.size(0))
+
+            # output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  #N*H*W
+            # multi_level_targets = multi_level_targets.detach().cpu().numpy()
+            # run_dice.update_matrix(multi_level_targets,output)
 
             torch.cuda.empty_cache()
 
             if self.global_step%1==0:
-                rundice, dice_list = run_dice.compute_dice() 
-                print("Category Dice: ", dice_list)
-                print('epoch:{}/{},step:{},train_loss:{:.5f},train_dice:{:.5f},run_dice:{:.5f},lr:{}'.format(epoch,self.n_epoch, step, loss.item(), dice.item(), rundice, optimizer.param_groups[0]['lr']))
+                # rundice, dice_list = run_dice.compute_dice()
+                # print("Category Dice: ", dice_list)
+                print('epoch:{}/{},step:{},train_loss:{:.5f},gland_train_dice:{:.5f},zone_train_dice:{:.5f},lesion_train_dice:{:.5f},lr:{}'.format(epoch,self.n_epoch, step, loss.item(), gland_train_dice.avg, zone_train_dice.avg, lesion_train_dice.avg, optimizer.param_groups[0]['lr']))
                 # run_dice.init_op()
-                self.writer.add_scalar(
-                  'data/train_loss',loss.item(),self.global_step
-                )
-                self.writer.add_scalar('data/train_dice', rundice,self.global_step)
+                # self.writer.add_scalar(
+                #   'data/train_loss',loss.item(),self.global_step
+                # )
+                # self.writer.add_scalar('data/gland_train_dice', gland_train_dice.avg,self.global_step)
+                # self.writer.add_scalar('data/zone_train_dice', zone_train_dice.avg, self.global_step)
+                # self.writer.add_scalar('data/lesion_train_dice', lesion_train_dice.avg, self.global_step)
 
             self.global_step += 1
 
-        return train_loss.avg,train_dice.avg,run_dice.compute_dice()[0]
+        return train_loss.avg,gland_train_dice.avg,zone_train_dice.avg,lesion_train_dice.avg
 
 
-    def _val_on_epoch(self,epoch,net,criterion,val_path,val_transformer=None):
+    def _val_on_epoch(self,epoch,net,criterion,val_loader,val_transformer=None):
         net.eval()
 
-        val_transformer = transforms.Compose([
-            Normalize(),
-            # tio.Resize(target_shape=(24, 128, 128)),
-            # tio.CropOrPad(target_shape=(32, 128, 128)),
-            To_Tensor(num_class=self.num_classes,input_channel = self.channels)
-        ])
-
-        val_dataset = DataGenerator(val_path,num_class=self.num_classes,transform=val_transformer)
-
-        val_loader = DataLoader(
-          val_dataset,
-          batch_size=self.batch_size,
-          shuffle=False,
-          num_workers=self.num_workers,
-          pin_memory=True
-        )
-
         val_loss = AverageMeter()
-        val_dice = AverageMeter()
+        gland_val_dice = AverageMeter()
+        zone_val_dice = AverageMeter()
+        lesion_val_dice = AverageMeter()
 
         from metrics import RunningDice
         run_dice = RunningDice(labels=range(self.num_classes),ignore_label=-1)
 
         with torch.no_grad():
-            for step,sample in enumerate(val_loader):
-                data = sample['image']
-                target = sample['label'][:, 1].unsqueeze(1)
+            for step,(sample, pid, slice) in enumerate(val_loader):
+                lesion_targets = []
+                zone_targets = []
+                gland_targets = []
+                for name, value in sample.items():
+                    if name == 'ct':
+                        data = value
+                    elif 'lesion' in name:
+                        lesion_targets.append(value)
+                    elif 'gland' in name:
+                        gland_targets.append(value)
+                    elif 'zone' in name:
+                        zone_targets.append(value)
+                lesion_target = torch.stack(lesion_targets)
+                zone_target = torch.stack(zone_targets)
+                gland_target = torch.stack(gland_targets)
+                multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).permute(1, 0, 2, 3)
 
                 data = data.to(self.device)
-                target = target.to(self.device)
+                multi_level_targets = multi_level_targets.to(self.device)
                 with autocast(self.use_fp16):
                     output = net(data)
                     if isinstance(output,tuple):
                         output = output[0]
-                loss = criterion(output,target)
+                loss = criterion(output,multi_level_targets.float())
 
                 output = output.float()
                 loss = loss.float()
 
-                dice = compute_dice(output.detach(),target)
+                dice = compute_dice(output.detach(),multi_level_targets)
                 val_loss.update(loss.item(),data.size(0))
-                val_dice.update(dice.item(),data.size(0))
+                gland_val_dice.update(dice[0], data.size(0))
+                zone_val_dice.update(sum(dice[1:3]) / 2, data.size(0))
+                lesion_val_dice.update(dice[3], data.size(0))
 
-                output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  # N*H*W
-                target = target.detach().cpu().numpy()
-                run_dice.update_matrix(target,output)
+                # output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  # N*H*W
+                # target = target.detach().cpu().numpy()
+                # run_dice.update_matrix(target,output)
 
                 torch.cuda.empty_cache()
 
                 if step % 1 == 0:
-                    rundice, dice_list = run_dice.compute_dice() 
-                    print("Category Dice: ", dice_list)
-                    print('Eval epoch:{}/{},step:{},val_loss:{:.5f},val_dice:{:.5f},run_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss.item(), dice.item(), rundice))
+                    # rundice, dice_list = run_dice.compute_dice()
+                    # print("Category Dice: ", dice_list)
+                    print('Eval epoch:{}/{},step:{},val_loss:{:.5f},gland_val_dice:{:.5f},zone_val_dice:{:.5f},lesion_val_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss.item(), gland_val_dice.avg, zone_val_dice.avg, lesion_val_dice.avg))
                     # run_dice.init_op()
-                    self.writer.add_scalar(
-                        'data/eval_loss', loss.item(), self.global_step
-                    )
-                    self.writer.add_scalar('data/eval_dice', rundice, self.global_step)
+                    # self.writer.add_scalar(
+                    #     'data/eval_loss', loss.item(), self.global_step
+                    # )
+                    # self.writer.add_scalar('data/eval_dice', rundice, self.global_step)
 
-        return val_loss.avg,val_dice.avg,run_dice.compute_dice()[0]
+        return val_loss.avg,gland_val_dice.avg,zone_val_dice.avg,lesion_val_dice.avg
 
 
     def val(self,val_path,net = None,val_transformer=None,mode = 'val'):
@@ -620,13 +684,8 @@ def compute_dice(predict,target,ignore_index=0):
     """
     assert predict.shape == target.shape, 'predict & target shape do not match'
     predict = (F.sigmoid(predict) > 0.5).int()
-    
-    dice_list = np.ones(2,dtype=np.float32)
-    for i in range(2):
-        if i != ignore_index:
-            if i not in predict and i not in target:
-                continue
-            dice = binary_dice((predict==i).float(), (target==i).float())
-            dice_list[i] = round(dice.item(),4)
-    
-    return np.nanmean(dice_list[1:])
+    dice_list = []
+    for i in range(predict.shape[1]):
+        dice = binary_dice((predict[:,i]==1).float(), (target[:, i]==1).float())
+        dice_list.append(round(dice.item(),4))
+    return dice_list

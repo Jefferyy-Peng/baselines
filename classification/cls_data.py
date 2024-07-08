@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 from typing import List, Optional, Union
 import SimpleITK as sitk
+import h5py
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
@@ -12,6 +13,11 @@ import torch
 from torch.cuda.amp import autocast as autocast
 from torch.nn import functional as F
 import argparse
+
+def save_as_hdf5(data, save_path, key):
+    hdf5_file = h5py.File(save_path, 'a')
+    hdf5_file.create_dataset(key, data=data)
+    hdf5_file.close()
 
 def get_info(data):
     info = []
@@ -81,7 +87,7 @@ def get_weight_list(
 
     return path_list
 
-def store_images_labels_2d(save_path, patient_id, cts, labels):
+def store_images_labels_2d(image_save_path, label_save_path, patient_id, cts, labels, augment=False):
     plist = []
     llist = []
 
@@ -92,13 +98,26 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
         for j in range(ct.shape[0]):
             ct[j] = rescale_intensity(ct[j], out_range=(0, 255))
         img = Image.fromarray(ct.transpose((1,2,0)).astype(np.uint8))
+        
 
-        path = os.path.join(save_path, '%s_%d.png' % (patient_id, i))
+        image_path = os.path.join(image_save_path, '%s_%d.png' % (patient_id, i))
+        label_path = os.path.join(label_save_path, '%s_%d.png' % (patient_id, i))
         label = np.max(lab) - 1 if np.max(lab)>1 else np.max(lab)
-        plist.append(path)
+        
+        plist.append(image_path)
         llist.append(label)
-
-        img.save(path)
+        lab = Image.fromarray(lab)
+        img.save(image_path)
+        lab.save(label_path)
+        if augment:
+            if np.max(lab) == 1:
+                for j in range(14):
+                    redundant_image_path = image_path.replace('.png', f'_{j}.png')
+                    redundant_label_path = label_path.replace('.png', f'_{j}.png')
+                    plist.append(redundant_image_path)
+                    llist.append(label)
+                    img.save(redundant_image_path)
+                    lab.save(redundant_label_path)
 
     return plist,llist
 
@@ -106,10 +125,15 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
 def make_data(
     base_dir: Union[Path, str] = '../../picai_baselines/workdir/nnUNet_raw_data/Task2203_picai_baseline/imagesTr',
     label_dir: Union[Path, str] = '../../picai_baselines/workdir/nnUNet_raw_data/Task2203_picai_baseline/labelsTr',
-    d2_dir: Union[Path, str] = './images_illness_3c',
+    d2_dir: Union[Path, str] = './images_illness_3c_redundant',
+    lab_dir = './labels_illness_3c_redundant',
     csv_save_path: Union[Path, str] = 'picai_illness_3c.csv',
 ):
     os.makedirs(d2_dir, exist_ok=True)
+    os.makedirs(lab_dir, exist_ok=True)
+
+    d2_dir_3d = './images_illness_3c_3d'
+    os.makedirs(d2_dir_3d, exist_ok=True)
 
     count = 0
 
@@ -120,15 +144,18 @@ def make_data(
     info = {}
     info['id'] = []
     info['label'] = []
+    seg = {}
 
     for path in tqdm(pathlist):
         seg = sitk.ReadImage(os.path.join(label_dir,path + '.nii.gz'))
 
         seg_image = sitk.GetArrayFromImage(seg).astype(np.uint8)
         # seg_image[seg_image>0] = 1
+        if np.max(seg_image) > 1:
+            print()
         seg_image[seg_image>3] = 3
-        if np.max(seg_image) == 0:
-            continue
+        # if np.max(seg_image) == 0:
+        #     continue
 
         in_1 = sitk.ReadImage(os.path.join(base_dir,path + '_0000.nii.gz'))
         in_2 = sitk.ReadImage(os.path.join(base_dir,path + '_0001.nii.gz'))
@@ -141,7 +168,12 @@ def make_data(
         img = np.stack((in_1,in_2,in_3),axis=0)
         # print(img.shape)
 
-        plist,llist = store_images_labels_2d(d2_dir,count,img,seg_image)
+        # hdf5_path = os.path.join(d2_dir_3d, str(count) + '.hdf5')
+        #
+        # save_as_hdf5(img, hdf5_path, 'ct')
+        # save_as_hdf5(seg_image, hdf5_path, 'seg')
+
+        plist,llist = store_images_labels_2d(d2_dir,lab_dir,count,img,seg_image, augment=True)
         info['id'].extend(plist)
         info['label'].extend(llist)
         count += 1

@@ -1,21 +1,29 @@
+import copy
 import math
 import os
 import shutil
 
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as tr
+from matplotlib import pyplot as plt
 from tensorboardX import SummaryWriter
 from torch.cuda.amp import GradScaler
 from torch.cuda.amp import autocast as autocast
 from torch.nn import DataParallel
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from sklearn.metrics import roc_auc_score
+import torch.nn.functional as F
 
+from classification.config import TASK
 from classification.data_utils.data_loader import DataGenerator
 from classification.data_utils.transforms import RandomRotate
+from classification.model import ImageEncoderWithClass
 from classification.utils import dfs_remove_weight
+from segment_anything import sam_model_registry
 
 
 class Classifier(object):
@@ -36,7 +44,7 @@ class Classifier(object):
     '''
     def __init__(self, net_name=None, gamma=0.1, lr=1e-3, n_epoch=1, channels=1, num_classes=3, input_shape=None,
                  batch_size=6, num_workers=0, device=None, pre_trained=False, weight_path=None, weight_decay=0.,
-                 mean=(0.105393,), std=(0.203002,), milestones=None,use_fp16=False,
+                 mean=(0.105393,), std=(0.203002,), milestones=None,use_fp16=False, accumulation_steps=1,
                  external_pretrained=False):
         super(Classifier, self).__init__()
 
@@ -49,6 +57,7 @@ class Classifier(object):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.device = device
+        self.accumulation_steps = accumulation_steps
 
         self.pre_trained = pre_trained
         self.weight_path = weight_path
@@ -75,6 +84,9 @@ class Classifier(object):
             self._get_pre_trained(self.weight_path)
             self.loss_threshold = eval(os.path.splitext(
                 self.weight_path.split(':')[-1])[0])
+        # sam_model = sam_model_registry['vit_b'](checkpoint='../segmentation/medsam_vit_b.pth')
+        # self.net = ImageEncoderWithClass(sam_model.image_encoder)
+        # self.net = nn.DataParallel(self.net)
 
         self.transform = [
             tr.Resize(size=self.input_shape),  #2
@@ -85,6 +97,11 @@ class Classifier(object):
             tr.RandomHorizontalFlip(p=0.5),   #  7
             tr.RandomVerticalFlip(p=0.5),   #8
             tr.ToTensor(),   #9
+        ]
+        self.val_transform = [
+            tr.Resize(size=self.input_shape),  # 2
+            tr.ColorJitter(brightness=.3, hue=.3, contrast=.3),  # 4
+            tr.ToTensor(),  # 9
         ]
 
     def trainer(self, train_path, val_path, label_dict, cur_fold, output_dir=None, log_dir=None, optimizer='Adam',
@@ -118,7 +135,6 @@ class Classifier(object):
 
         net = self.net
         lr = self.lr
-        loss = self._get_loss(loss_fun, class_weight)
         weight_decay = self.weight_decay
 
         if len(self.device.split(',')) > 1:
@@ -127,7 +143,12 @@ class Classifier(object):
         train_transformer = transforms.Compose(self.transform)
 
         train_dataset = DataGenerator(
-            train_path, label_dict, channels=self.channels, transform=train_transformer)
+            train_path, 'train',label_dict, channels=self.channels, transform=train_transformer)
+        if class_weight is None:
+            class_weight = train_dataset.class_weights
+
+        loss = self._get_loss(loss_fun, class_weight.astype(np.float32))
+        # loss = self._get_loss(loss_fun)
 
         train_loader = DataLoader(
             train_dataset,
@@ -159,7 +180,7 @@ class Classifier(object):
 
             torch.cuda.empty_cache()
 
-            val_loss, val_ap = self._val_on_epoch(epoch, net, loss, val_path, label_dict)
+            val_loss, val_ap, val_auc = self._val_on_epoch(epoch, net, loss, val_path, label_dict)
 
             if lr_scheduler is not None:
                 lr_scheduler.step()
@@ -167,14 +188,14 @@ class Classifier(object):
             print('Train epoch:{},train_loss:{:.5f},train_acc:{:.5f}'
                   .format(epoch, train_loss, train_acc))
 
-            print('Val epoch:{},val_loss:{:.5f},val_ap:{:.5f}'
-                  .format(epoch, val_loss, val_ap))
+            print('Val epoch:{},val_loss:{:.5f},val_ap:{:.5f},val:{:.5f}'
+                  .format(epoch, val_loss, val_ap, val_auc))
 
             self.writer.add_scalars(
                 'data/loss', {'train': train_loss, 'val': val_loss}, epoch
             )
             self.writer.add_scalars(
-                'data/acc', {'train': train_acc, 'val': val_ap}, epoch
+                'data/acc', {'train': train_acc, 'val': val_ap, 'val_auc': val_auc}, epoch
             )
             self.writer.add_scalar(
                 'data/lr', optimizer.param_groups[0]['lr'], epoch
@@ -237,7 +258,6 @@ class Classifier(object):
             with autocast(self.use_fp16):
                 output = net(data)
                 loss = criterion(output, target)
-            
             optimizer.zero_grad()
             if self.use_fp16:
                 scaler.scale(loss).backward()
@@ -246,6 +266,19 @@ class Classifier(object):
             else:
                 loss.backward()
                 optimizer.step()
+            # if self.use_fp16:
+            #     scaler.scale(loss).backward()
+            #     if (step + 1) % self.accumulation_steps == 0:
+            #         scaler.unscale_(optimizer)
+            #         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+            #         scaler.step(optimizer)
+            #         scaler.update()
+            #         optimizer.zero_grad()
+            # else:
+            #     loss.backward()
+            #     if (step + 1) % self.accumulation_steps == 0:
+            #         optimizer.step()
+            #         optimizer.zero_grad()
 
             output = output.float()
             loss = loss.float()
@@ -268,6 +301,16 @@ class Classifier(object):
                 )
 
             self.global_step += 1
+        # if (step + 1) % self.accumulation_steps != 0:
+        #     if self.use_fp16:
+        #         scaler.unscale_(optimizer)  # Unscale gradients
+        #         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)  # Gradient clipping (optional)
+        #         scaler.step(optimizer)  # Update parameters
+        #         scaler.update()  # Update the scale for next iteration
+        #         optimizer.zero_grad()
+        #     else:
+        #         optimizer.step()
+        #         optimizer.zero_grad()
 
         return train_loss.avg, train_acc.avg
 
@@ -275,10 +318,10 @@ class Classifier(object):
 
         net.eval()
 
-        val_transformer = transforms.Compose(self.transform)
+        val_transformer = transforms.Compose(self.val_transform)
 
         val_dataset = DataGenerator(
-            val_path, label_dict, channels=self.channels, transform=val_transformer)
+            val_path, 'val', label_dict, channels=self.channels, transform=val_transformer)
 
         val_loader = DataLoader(
             val_dataset,
@@ -294,10 +337,13 @@ class Classifier(object):
         pred = []
         tar = []
 
+        plot = False
+
         with torch.no_grad():
             for step, sample in enumerate(val_loader):
                 data = sample['image']
                 target = sample['label']
+                seg = sample['seg']
 
                 data = data.cuda()
                 target = target.cuda()
@@ -310,28 +356,43 @@ class Classifier(object):
 
                 # measure accuracy and record loss
                 acc = accuracy(output.data, target)[0]
-                
+                prediction = torch.argmax(F.softmax(output, dim=1), dim=1).detach().tolist()
+                pred.extend(prediction)
+
                 val_loss.update(loss.item(), data.size(0))
                 val_ap.update(acc.item(), data.size(0))
 
-                pred.extend(output[:,0].detach().tolist())
+                # pred.extend(output[:,0].detach().tolist())
                 tar.extend(target.detach().tolist())
 
                 torch.cuda.empty_cache()
+                if plot:
+                    fig, axes = plt.subplots(nrows=1, ncols=data.shape[0], figsize=(6 * data.shape[0], 8))
+                    color2 = np.array([144, 238, 144, 0.9])
+                    for i in range(data.shape[0]):
+                        image_copy = copy.copy(data[i][0, ...].unsqueeze(-1).expand(-1, -1, 3)).detach().cpu().numpy()
+                        image_copy = np.ascontiguousarray((image_copy * 255).astype(np.uint8))
+                        seg_mask = (seg[i] * 255).detach().cpu().numpy().astype(np.uint8)
+                        contours_lesion, _ = cv2.findContours(seg_mask.squeeze(0), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                        cv2.drawContours(image_copy, contours_lesion, -1, color2, 5)
+                        axes[i].imshow(image_copy)
+                        axes[i].set_title(f'target: {target[i]}, pred: {prediction[i]}')
+                    plt.savefig(f'./log/{TASK}')
 
-                print('epoch:{},step:{},val_loss:{:.5f},val_acc:{:.5f}'
+                print('Eval epoch:{},step:{},val_loss:{:.5f},val_acc:{:.5f}'
                       .format(epoch, step, loss.item(), acc.item()))
 
         pred = np.asarray(pred)
-        pred = 1 - pred
+        # pred = 1 - pred
         tar = np.asarray(tar)
         
         tar[tar > 0] = 1
 
         from sklearn.metrics import average_precision_score
         AP = average_precision_score(tar,pred)
+        auc = roc_auc_score(tar, pred)
 
-        return val_loss.avg, AP
+        return val_loss.avg, AP, auc
 
     def _get_net(self, net_name):
         from efficientnet_pytorch import EfficientNet

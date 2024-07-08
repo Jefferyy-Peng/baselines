@@ -1,5 +1,7 @@
 import argparse
+import re
 import time
+import copy
 
 import numpy as np
 
@@ -35,6 +37,55 @@ def get_cross_validation(path_list, fold_num, current_fold):
     print("Train set length:", len(train_id),
           "Val set length:", len(validation_id))
     return train_id, validation_id
+
+
+def extract_patient_ids(file_paths):
+
+    # Use a set to store unique patient IDs
+    patient_ids = []
+    path_dict = {}
+
+    for path in file_paths:
+        patient_id = path.split('/')[-1].split('_')[0]
+        if patient_id in path_dict.keys():
+            path_dict[patient_id].append(path)
+        else:
+            path_dict[patient_id] = [path]
+        if patient_id not in patient_ids:
+            patient_ids.append(patient_id)
+
+    return patient_ids, path_dict
+
+def get_cross_validation_by_patient(path_list, fold_num, current_fold):
+    patient_list, path_dict = extract_patient_ids(path_list)
+    _len_ = len(patient_list) // fold_num
+
+    train_id = []
+    validation_id = []
+    end_index = current_fold * _len_
+    start_index = end_index - _len_
+    if current_fold == fold_num:
+        validation_id.extend(patient_list[start_index:])
+        train_id.extend(patient_list[:start_index])
+    else:
+        validation_id.extend(patient_list[start_index:end_index])
+        train_id.extend(patient_list[:start_index])
+        train_id.extend(patient_list[end_index:])
+    train_path = []
+    val_path = []
+    for train in train_id:
+        train_path.extend(path_dict[train])
+    for val in validation_id:
+        paths = path_dict[val]
+        copy_paths = []
+        for path in paths:
+            if len(path.split('/')[-1].split('.')[0].split('_')) == 2:
+                copy_paths.append(path)
+        val_path.extend(copy_paths)
+
+    print("Train set length:", len(train_path),
+          "Val set length:", len(val_path))
+    return train_path, val_path
 
 
 def get_parameter_number(net):
@@ -74,7 +125,7 @@ if __name__ == "__main__":
             if current_fold == 0:
                 print(get_parameter_number(classifier.net))
 
-            train_path, val_path = get_cross_validation(
+            train_path, val_path = get_cross_validation_by_patient(
                 path_list, FOLD_NUM, current_fold)
 
             print("dataset length is %d"%len(train_path))

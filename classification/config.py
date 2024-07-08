@@ -1,6 +1,6 @@
 __all__ = ['efficientnet-b5']
 
-TASK = 'picai'
+TASK = 'picai_all_class_weight_test'
 NET_NAME = 'efficientnet-b5'
 VERSION = 'v0'
 DEVICE = '0'
@@ -12,7 +12,7 @@ GPU_NUM = len(DEVICE.split(','))
 FOLD_NUM = 5
 TTA_TIMES = 5
 
-NUM_CLASSES = 3
+NUM_CLASSES = 2
 from classification.utils import get_weight_list, get_weight_path
 
 CSV_PATH = './picai_illness_3c.csv'
@@ -45,7 +45,7 @@ INIT_TRAINER = {
     'std': None,
     'gamma': 0.1,
     'milestones': [30,60],
-    'use_fp16':True,
+    'use_fp16':False,
     'external_pretrained':True,
 }
 
