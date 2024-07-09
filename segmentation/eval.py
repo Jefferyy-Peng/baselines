@@ -5,6 +5,9 @@ import pickle
 import random
 import re
 
+from typing import (Callable, Dict, Hashable, Iterable, List, Optional, Sized,
+                    Tuple, Union)
+
 import numpy as np
 from matplotlib import pyplot as plt
 from torchvision import transforms
@@ -17,6 +20,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import cv2
+from report_guided_annotation import extract_lesion_candidates
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, MultiLevelDataGenerator)
@@ -25,6 +29,8 @@ from segmentation.model_single import ModelEmb
 from segmentation.segment_anything import sam_model_registry
 from segmentation.run import get_cross_validation_by_sample
 from segmentation.segment_anything.modeling import TwoWayTransformer, MaskDecoder
+from picai_eval import Metrics
+from picai_eval.eval import evaluate_case
 
 
 def set_seed(seed_value):
@@ -213,6 +219,8 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
 
     plt.savefig(os.path.join(save_path, f'slice_{count}'))
 
+    return lesion_dice, pz_dice, tz_dice, gland_dice
+
     # # Iterate over each slice
     # fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 8))
     #
@@ -267,7 +275,8 @@ def search_ckpt_path(ckpt_path):
 def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
     lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
-    zone_pid = pickle.load(open('./dataset/zone_segdata/zone_pid.p', 'rb'))
+    # use zone_segdata_all for all data
+    zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
     gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
 
     state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
@@ -282,7 +291,7 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device):
         To_Tensor(num_class=2, input_channel=3)
     ])
 
-    val_dataset = MultiLevelDataGenerator(val_path, num_class=2, transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+    val_dataset = MultiLevelDataGenerator(val_path, 'val', num_class=2, transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
 
     val_loader = DataLoader(
         val_dataset,
@@ -292,6 +301,9 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device):
         pin_memory=True
     )
     count = 0
+
+    dice_dict = {}
+    lesion_results = []
     with torch.no_grad():
         for step, (sample, pid, slice) in enumerate(tqdm(val_loader)):
             lesion_targets = []
@@ -316,18 +328,39 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device):
             gland_target = gland_target.to(device)
 
             with autocast(False):
-                output = (torch.sigmoid(net(data)) > 0.5)
+                logits = torch.sigmoid(net(data))
+                output = logits > 0.5
                 gland_output = output[:, 0]
                 zone_output = output[:, 1:3]
                 lesion_output = output[:, 3]
                 # if isinstance(output, tuple):
                 #     output = output[0]
-            plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), log_dir, pid[0]+'-'+slice[0])
+            multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
+            preds = []
+            for slices in logits.detach().cpu().numpy():
+                for x in slices:
+                    preds.append(extract_lesion_candidates(np.expand_dims(x, axis=-1))[0])
+            for y_det, y_true in zip(preds, [multi_level_target[0, :, :, i] for i in range(multi_level_target.shape[3])]):
+                y_list, *_ = evaluate_case(
+                    y_det=y_det,
+                    y_true=y_true,
+                )
+
+                # aggregate all validation evaluations
+                lesion_results.append(y_list)
+            lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), log_dir, pid[0]+'-'+slice[0])
+            dice_dict[pid[0] if isinstance(pid, list) else pid] = [lesion_dice, pz_dice, tz_dice, gland_dice]
             count += 1
+    lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
+    valid_metrics = Metrics(lesion_results)
+    auc = valid_metrics.auroc
+    ap = valid_metrics.AP
+    score = valid_metrics.score
+    print(f'auc: {auc}, ap:{ap}, score: {score}')
 
 
 if __name__ == '__main__':
-    PATH_DIR = './dataset/lesion_segdata_AI/data_2d'
+    PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
     PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
     train_path, val_path = get_cross_validation_by_sample(PATH_LIST, 5, 1)
     sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
@@ -353,6 +386,6 @@ if __name__ == '__main__':
     )
     ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_test_lr_0.0001_weight_decay_0.001')
 
-    log_dir = './new_log/eval/MedSAMALL'
+    log_dir = './new_log/eval/MedSAM3LevelALLData'
 
     plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:1')

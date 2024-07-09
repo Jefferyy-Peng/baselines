@@ -18,11 +18,11 @@ from torchvision import transforms
 from sklearn.metrics import roc_auc_score
 import torch.nn.functional as F
 
-from classification.config import TASK
-from classification.data_utils.data_loader import DataGenerator
-from classification.data_utils.transforms import RandomRotate
-from classification.model import ImageEncoderWithClass
-from classification.utils import dfs_remove_weight
+from config import TASK
+from data_utils.data_loader import DataGenerator
+from data_utils.transforms import RandomRotate
+from model import ImageEncoderWithClass
+from utils import dfs_remove_weight
 from segment_anything import sam_model_registry
 
 

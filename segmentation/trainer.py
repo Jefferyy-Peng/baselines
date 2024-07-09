@@ -120,13 +120,13 @@ class SemanticSeg(object):
             iou_head_depth=3,
             iou_head_hidden_dim=256,
         )
-        self.net = MedSAMAUTOMULTI(
+        self.net = DataParallel(MedSAMAUTOMULTI(
                 image_encoder=sam_model.image_encoder,
                 mask_decoder=multi_mask_decoder,
                 prompt_encoder=sam_model.prompt_encoder,
                 dense_encoder=dense_model,
                 image_size=512
-            )
+            ))
 
 
         if self.pre_trained:
@@ -224,9 +224,9 @@ class SemanticSeg(object):
 
 
         lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
-        zone_pid = pickle.load(open('./dataset/zone_segdata/zone_pid.p', 'rb'))
+        zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
         gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
-        train_dataset = MultiLevelDataGenerator(train_path,num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+        train_dataset = MultiLevelDataGenerator(train_path, 'train', num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
 
         train_loader = DataLoader(
           train_dataset,
@@ -241,7 +241,7 @@ class SemanticSeg(object):
             # tio.CropOrPad(target_shape=(32, 128, 128)),
             To_Tensor(num_class=self.num_classes, input_channel=self.channels)
         ])
-        val_dataset = MultiLevelDataGenerator(val_path, num_class=self.num_classes,transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+        val_dataset = MultiLevelDataGenerator(val_path, 'val', num_class=self.num_classes,transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
         val_loader = DataLoader(
             val_dataset,
             batch_size=self.batch_size,
@@ -472,9 +472,14 @@ class SemanticSeg(object):
                 zone_val_dice.update(sum(dice[1:3]) / 2, data.size(0))
                 lesion_val_dice.update(dice[3], data.size(0))
 
-                # output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  # N*H*W
+                output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  # N*H*W
                 # target = target.detach().cpu().numpy()
                 # run_dice.update_matrix(target,output)
+
+                preds = [
+                    extract_lesion_candidates(x)[0]
+                    for x in output
+                ]
 
                 torch.cuda.empty_cache()
 

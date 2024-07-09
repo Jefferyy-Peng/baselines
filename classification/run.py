@@ -5,10 +5,10 @@ import copy
 
 import numpy as np
 
-from classification.config import (CSV_PATH, FOLD_NUM, INIT_TRAINER,
+from config import (CSV_PATH, FOLD_NUM, INIT_TRAINER,
                                    SETUP_TRAINER)
-from classification.data_utils.csv_reader import csv_reader_single
-from classification.trainer import Classifier
+from data_utils.csv_reader import csv_reader_single
+from trainer import Classifier
 
 KEY = {
     'picai':['image_name','class_id'],

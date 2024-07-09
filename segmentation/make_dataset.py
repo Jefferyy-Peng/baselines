@@ -45,8 +45,6 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
         #     new_lab[0][lab == 1] = 1
         #     new_lab[1][lab == 2] = 1
         #     lab = new_lab
-        if lab.max() < 1:
-            continue
 
         hdf5_file = h5py.File(os.path.join(save_path, '%s_%d.hdf5' % (patient_id, i)), 'w')
         hdf5_file.create_dataset('ct', data=ct.astype(np.int16))
@@ -75,12 +73,13 @@ def make_segdata(base_dir,label_dir,output_dir):
 
 
     for id, path in enumerate(tqdm(pathlist)):
-        # if id > 800:
-        #     break
         seg = sitk.ReadImage(os.path.join(label_dir,path + '.nii.gz'))
 
         seg_image = sitk.GetArrayFromImage(seg).astype(np.uint8)
-        # seg_image[seg_image>=2] = 1
+        # comment for zone segmentations (zone have >= 2 values and is used)
+        seg_image[seg_image>=2] = 1
+
+        # comment for samples that have 1 values
         # if np.max(seg_image) == 0:
         #     count += 1
         #     continue
@@ -99,6 +98,7 @@ def make_segdata(base_dir,label_dir,output_dir):
         save_as_hdf5(img,hdf5_path,'ct')
         save_as_hdf5(seg_image,hdf5_path,'seg')
 
+        # count -> path for lesion, path -> count for gland and zone
         pid_dict[count] = path
         store_images_labels_2d(data_dir_2d,count,img,seg_image)
 
