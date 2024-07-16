@@ -72,7 +72,8 @@ class MedSAMAUTOMULTI(nn.Module):
             mask_decoder,
             prompt_encoder,
             dense_encoder,
-            image_size
+            image_size,
+            mode='normal'
     ):
         super().__init__()
         self.image_encoder = image_encoder
@@ -80,10 +81,11 @@ class MedSAMAUTOMULTI(nn.Module):
         self.prompt_encoder = prompt_encoder
         self.dense_encoder = dense_encoder
         self.image_size = image_size
+        self.mode = mode
 
         # # freeze image encoder
-        for param in self.image_encoder.parameters():
-            param.requires_grad = False
+        # for param in self.image_encoder.parameters():
+        #     param.requires_grad = False
 
         # # freeze mask decoder
         # for param in self.mask_decoder.parameters():
@@ -115,6 +117,57 @@ class MedSAMAUTOMULTI(nn.Module):
             dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
             multimask_output=True,
         )
+        # print(image_embedding.shape, dense_embeddings.shape, low_res_masks.shape)
+
+        ori_res_masks = F.interpolate(
+            low_res_masks,
+            size=(image.shape[2], image.shape[3]),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        # print(ori_res_masks.shape)
+        if self.mode == 'normal':
+            return ori_res_masks
+        elif self.mode == 'viz_representation':
+            return ori_res_masks, image_embedding, dense_embeddings
+
+
+class MedSAMAUTOCNN(nn.Module):
+    def __init__(
+            self,
+            image_encoder,
+            mask_decoder,
+            prompt_encoder,
+            dense_encoder,
+            image_size
+    ):
+        super().__init__()
+        self.image_encoder = image_encoder
+        self.mask_decoder = mask_decoder
+
+        self.prompt_encoder = prompt_encoder
+        self.dense_encoder = dense_encoder
+        self.image_size = image_size
+
+        # freeze image encoder
+        # for param in self.image_encoder.parameters():
+        #     param.requires_grad = False
+
+        # # freeze mask decoder
+        # for param in self.mask_decoder.parameters():
+        #     param.requires_grad = False
+
+        # freeze prompt encoder
+        for param in self.prompt_encoder.parameters():
+            param.requires_grad = False
+
+    def forward(self, image):
+        # image_small = F.interpolate(image, (self.image_size, self.image_size), mode='bilinear', align_corners=True)
+
+        image_embeddings = self.image_encoder(image)  # (B, 256, 64, 64)
+
+        low_res_masks = self.mask_decoder(image_embeddings)
         # print(image_embedding.shape, dense_embeddings.shape, low_res_masks.shape)
 
         ori_res_masks = F.interpolate(

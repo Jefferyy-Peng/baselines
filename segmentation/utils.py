@@ -6,8 +6,25 @@ from typing import Union
 import h5py
 import numpy as np
 import torch
+from picai_eval.eval import evaluate_case
+from report_guided_annotation import extract_lesion_candidates
 from skimage.metrics import hausdorff_distance
 
+
+def compute_results_detect(logits, target, results):
+    preds = []
+    logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits
+    preds.append(extract_lesion_candidates(logits, threshold=0.5)[0])
+    for y_det, y_true in zip(preds,
+                             [target]):
+        y_list, *_ = evaluate_case(
+            y_det=y_det,
+            y_true=y_true,
+        )
+
+        # aggregate all validation evaluations
+        results.append(y_list)
+    return results
 
 def binary_dice(y_true, y_pred):
     smooth = 1e-7

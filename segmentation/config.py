@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'MedSAMAuto_Unified_equal_rate'
+VERSION = 'UNet_Unified_equal_rate'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -24,7 +24,7 @@ GPU_NUM = len(DEVICE.split(','))
 #--------------------------------- mode and data path setting
 PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
 PATH_LIST = glob.glob(os.path.join(PATH_DIR,'*.hdf5'))
-PATH_AP = './dataset/gland_segdata/data_3d'
+PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
 AP_LIST = glob.glob(os.path.join(PATH_AP,'*.hdf5'))
 #--------------------------------- 
 
@@ -36,7 +36,7 @@ print(WEIGHT_PATH)
 INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
-  'batch_size':240,
+  'batch_size':40,
   'num_workers':12,
   'device':'cuda',
   'pre_trained':PRE_TRAINED,
@@ -51,4 +51,5 @@ SETUP_TRAINER = {
   'output_dir':'./new_ckpt/{}/{}'.format(PHASE,VERSION),
   'log_dir':'./new_log/{}/{}'.format(PHASE,VERSION),
   'phase':PHASE,
+  'activation': False
   }
