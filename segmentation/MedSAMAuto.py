@@ -83,9 +83,9 @@ class MedSAMAUTOMULTI(nn.Module):
         self.image_size = image_size
         self.mode = mode
 
-        # # freeze image encoder
-        # for param in self.image_encoder.parameters():
-        #     param.requires_grad = False
+        # freeze image encoder
+        for param in self.image_encoder.parameters():
+            param.requires_grad = False
 
         # # freeze mask decoder
         # for param in self.mask_decoder.parameters():

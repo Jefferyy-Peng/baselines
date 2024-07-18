@@ -9,6 +9,15 @@ from config import (AP_LIST, CURRENT_FOLD, FOLD_NUM, INIT_TRAINER,
 from trainer import SemanticSeg
 from sklearn.model_selection import ParameterGrid
 
+'''
+things to change:
+        - activation
+        - model (model type, freeze layer)
+        - loss
+        - upsample rate
+        - PHASE
+'''
+
 
 def get_cross_validation_by_sample(path_list, fold_num, current_fold):
 

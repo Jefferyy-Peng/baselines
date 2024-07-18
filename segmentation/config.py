@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'UNet_Unified_equal_rate'
+VERSION = 'MedSAMAuto_Focal_Dice_Unified_equal_rate'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -51,5 +51,5 @@ SETUP_TRAINER = {
   'output_dir':'./new_ckpt/{}/{}'.format(PHASE,VERSION),
   'log_dir':'./new_log/{}/{}'.format(PHASE,VERSION),
   'phase':PHASE,
-  'activation': False
+  'activation': True
   }

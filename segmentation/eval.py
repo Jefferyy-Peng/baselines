@@ -5,12 +5,15 @@ import pickle
 import random
 import re
 from collections import OrderedDict
+import seaborn as sns
+from monai.transforms import Resize
 
 from typing import (Callable, Dict, Hashable, Iterable, List, Optional, Sized,
                     Tuple, Union)
 
 import numpy as np
 from matplotlib import pyplot as plt
+from sklearn.manifold import TSNE
 from torchvision import transforms
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -25,9 +28,9 @@ from report_guided_annotation import extract_lesion_candidates
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, MultiLevelDataGenerator)
-from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI
-from segmentation.config import FOLD_NUM, CURRENT_FOLD, PHASE
-from segmentation.model_single import ModelEmb
+from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN
+from segmentation.config import FOLD_NUM, CURRENT_FOLD
+from segmentation.model_single import ModelEmb, SegDecoderCNN
 from segmentation.segment_anything import sam_model_registry
 from segmentation.run import get_cross_validation_by_sample
 from segmentation.segment_anything.modeling import TwoWayTransformer, MaskDecoder
@@ -306,7 +309,7 @@ def search_ckpt_path(ckpt_path):
 
     return ckpt_file
 
-def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device):
+def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
     lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
     # use zone_segdata_all for all data
@@ -369,42 +372,51 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device):
             gland_target = gland_target.to(device)
 
             with autocast(False):
-                logits = torch.sigmoid(net(data))
+                if activation:
+                    logits = torch.sigmoid(net(data))
+                else:
+                    logits = net(data)
                 output = logits > 0.5
                 gland_output = output[:, 0]
                 zone_output = output[:, 1:3]
                 lesion_output = output[:, 3]
                 # if isinstance(output, tuple):
                 #     output = output[0]
-            multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
-            preds = []
-            for slices in logits[:,-1,:,:].detach().cpu().numpy():
-                preds.append(extract_lesion_candidates(np.expand_dims(slices, axis=-1), threshold=0.5)[0])
-            for y_det, y_true in zip(preds, [lesion_target[:, 0]]):
-                y_list, *_ = evaluate_case(
-                    y_det=y_det,
-                    y_true=y_true.permute(1, 2, 0).detach().cpu().numpy(),
-                )
-
-                # aggregate all validation evaluations
-                lesion_results.append(y_list)
+            # multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
+            # preds = []
+            # for slices in logits[:,-1,:,:].detach().cpu().numpy():
+            #     preds.append(extract_lesion_candidates(np.expand_dims(slices, axis=-1), threshold=0.5)[0])
+            # for y_det, y_true in zip(preds, [lesion_target[:, 0]]):
+            #     y_list, *_ = evaluate_case(
+            #         y_det=y_det,
+            #         y_true=y_true.permute(1, 2, 0).detach().cpu().numpy(),
+            #     )
+            #
+            #     # aggregate all validation evaluations
+            #     lesion_results.append(y_list)
             lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), log_dir, pid[0]+'-'+slice[0])
             dice_dict[pid[0] if isinstance(pid, list) else pid] = [lesion_dice, pz_dice, tz_dice, gland_dice]
             count += 1
-    lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
-    valid_metrics = Metrics(lesion_results)
-    auc = valid_metrics.auroc
-    ap = valid_metrics.AP
-    score = valid_metrics.score
-    print(f'auc: {auc}, ap:{ap}, score: {score}')
-    os.system(f'cd {log_dir}')
-    os.system(f'touch result.txt')
-    os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
+    # lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
+    # valid_metrics = Metrics(lesion_results)
+    # auc = valid_metrics.auroc
+    # ap = valid_metrics.AP
+    # score = valid_metrics.score
+    # print(f'auc: {auc}, ap:{ap}, score: {score}')
+    # os.system(f'cd {log_dir}')
+    # os.system(f'touch result.txt')
+    # os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
 
-def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode='normal'):
+def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode='normal',):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
 
+    image_tsne = TSNE(n_components=2, random_state=42)
+    dense_tsne = TSNE(n_components=2, random_state=42)
+
     state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
+
+    revert_transform = Resize((256, 256), mode='bilinear')
+    seg_transform = Resize((256, 256), mode='nearest')
 
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
@@ -446,6 +458,9 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
 
     dice_dict = {}
     lesion_results = []
+    image_embeddings = []
+    dense_embeddings = []
+    image_targets = []
     with torch.no_grad():
         for step, sample in enumerate(tqdm(val_loader)):
             data = sample['ct']
@@ -458,21 +473,127 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
                 output = net(data)
             elif mode == 'viz_representation':
                 output, image_embedding, dense_embedding = net(data)
+                image_embeddings.append(
+                    torch.mean(image_embedding.reshape(image_embedding.shape[0], image_embedding.shape[1], -1), dim=2))
+                dense_embeddings.append(
+                    torch.mean(dense_embedding.reshape(dense_embedding.shape[0], dense_embedding.shape[1], -1), dim=2))
+                image_targets.append(torch.Tensor([this_target.max() > 0 for this_target in target.squeeze(0)]))
             if isinstance(output, tuple):
                 output = output[0]
-
-            # for i, slice in enumerate(image_embedding):
-            #
 
             output = output.float()
             if activation:
                 output = torch.sigmoid(output)  # N*H*W
-            output = output.detach().cpu().numpy()
+            output = output.detach().cpu()
+            lesion_output = output[:, -1, :, :].unsqueeze(1)
+            lesion_output = torch.from_numpy(np.array([revert_transform(slice) for slice in lesion_output])).squeeze(1)
+            target = target.detach().cpu()
+            target = target[0].unsqueeze(1)
+            target = torch.from_numpy(np.array([seg_transform(slice) for slice in target])).squeeze(1)
+            # if plot:
+            #     for
+            #     plot_segmentation2D()
 
-            lesion_results = compute_results_detect(output[:, -1, :, :], target.detach().cpu().numpy()[0],
+
+            lesion_results = compute_results_detect(lesion_output.numpy(), target.numpy(),
                                                     lesion_results)
+            # if step > 2:
+            #     break
+
+    if mode == 'viz_representation':
+        image_embeddings = torch.cat(image_embeddings)
+        dense_embeddings = torch.cat(dense_embeddings)
+        image_targets = torch.cat(image_targets)
+        image_embeddings_2d = image_tsne.fit_transform(image_embeddings.detach().cpu().numpy())
+        dense_embeddings_2d = dense_tsne.fit_transform(dense_embeddings.detach().cpu().numpy())
+
+        fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+
+        # Plot Embeddings1
+        axes[0].scatter(image_embeddings_2d[image_targets == 0, 0], image_embeddings_2d[image_targets == 0, 1], label='no lesion present', alpha=0.6)
+        axes[0].scatter(image_embeddings_2d[image_targets == 1, 0], image_embeddings_2d[image_targets == 1, 1], label='lesion present', alpha=0.6)
+        axes[0].set_title('2D Visualization of Image Embeddings')
+        axes[0].set_xlabel('TSNE Component 1')
+        axes[0].set_ylabel('TSNE Component 2')
+
+        # Plot Embeddings2
+        axes[1].scatter(dense_embeddings_2d[image_targets == 0, 0], dense_embeddings_2d[image_targets == 0, 1],
+                        label='no lesion present', alpha=0.6)
+        axes[1].scatter(dense_embeddings_2d[image_targets == 1, 0], dense_embeddings_2d[image_targets == 1, 1],
+                        label='lesion present', alpha=0.6)
+        axes[1].set_title('2D Visualization of Dense Embeddings')
+        axes[1].set_xlabel('TSNE Component 1')
+        axes[1].set_ylabel('TSNE Component 2')
+
+        # Show the plot
+        plt.tight_layout()
+        plt.savefig(os.path.join(log_dir, f'{mode}.png'))
 
     lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
+    FP_patient_level = 0
+    TP_patient_level = 0
+    FN_patient_level = 0
+    TN_patient_level = 0
+    lesion_results_list = []
+    for idx, lesion_result in lesion_results.items():
+        this_FP_patient_level = 0
+        this_TP_patient_level = 0
+        this_FN_patient_level = 0
+        this_TN_patient_level = 0
+        if len(lesion_result) == 0:
+            this_TN_patient_level = 1
+        for this_lesion_result in lesion_result:
+            if this_lesion_result[0] == 0 and this_lesion_result[2] == 0:
+                this_FP_patient_level = 1
+                this_TP_patient_level = 0
+                this_FN_patient_level = 0
+                this_TN_patient_level = 0
+                break
+            elif this_lesion_result[0] == 1 and this_lesion_result[2] != 0:
+                this_TP_patient_level = 1
+            elif this_lesion_result[0] == 1 and this_lesion_result[2] == 0:
+                this_FN_patient_level = 1
+            else:
+                raise NotImplementedError
+        for this_lesion_result in lesion_result:
+            lesion_results_list.append(this_lesion_result)
+        if this_TP_patient_level == 1 and this_FN_patient_level == 1:
+            print('TP and FN coexist')
+        FP_patient_level += this_FP_patient_level
+        TP_patient_level += this_TP_patient_level
+        FN_patient_level += this_FN_patient_level
+        TN_patient_level += this_TN_patient_level
+    FP_lesion_level = 0
+    TP_lesion_level = 0
+    FN_lesion_level = 0
+    TN_lesion_level = 0
+    for lesion_result_tuple in lesion_results_list:
+        if lesion_result_tuple[0] == 0 and lesion_result_tuple[2] == 0:
+            FP_lesion_level += 1
+        elif lesion_result_tuple[0] == 1 and lesion_result_tuple[2] != 0:
+            TP_lesion_level += 1
+        elif lesion_result_tuple[0] == 1 and lesion_result_tuple[2] == 0:
+            FN_lesion_level += 1
+        else:
+            raise NotImplementedError
+    conf_matrix_lesion_level = np.array([[TN_lesion_level, FP_lesion_level], [FN_lesion_level, TP_lesion_level]])
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(conf_matrix_lesion_level, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted 0', 'Predicted 1'],
+                yticklabels=['Actual 0', 'Actual 1'])
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title('Lesion Level Confusion Matrix')
+    plt.savefig(os.path.join(log_dir, 'Lesion Level Confusion Matrix.png'))
+
+    conf_matrix_patient_level = np.array([[TN_patient_level, FP_patient_level], [FN_patient_level, TP_patient_level]])
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(conf_matrix_patient_level, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted 0', 'Predicted 1'],
+                yticklabels=['Actual 0', 'Actual 1'])
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title('Patient Level Confusion Matrix')
+    plt.savefig(os.path.join(log_dir, 'Patient Level Confusion Matrix.png'))
+
     valid_metrics = Metrics(lesion_results)
     auc = valid_metrics.auroc
     ap = valid_metrics.AP
@@ -487,15 +608,15 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
 
 
 if __name__ == '__main__':
-    # PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
-    # PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
-    # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
+    PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
+    PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
+    train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
 
-    PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
-    AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
-    train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
+    # PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
+    # AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
+    # train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
 
-    mode = 'viz_representation'
+    mode = 'normal'
 
     activation = False
 
@@ -524,11 +645,24 @@ if __name__ == '__main__':
     #     image_size=512,
     #     mode=mode
     # )
+
+    # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
+    #
+    # net = MedSAMAUTOCNN(
+    #     image_encoder=sam_model.image_encoder,
+    #     mask_decoder=mask_decoder_model,
+    #     prompt_encoder=sam_model.prompt_encoder,
+    #     dense_encoder=None,
+    #     image_size=512
+    # )
+
+    PHASE = 'seg'
+
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
     ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    # log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateDetect'
-    log_dir = './new_log/eval/UNet3LevelALLDataEqualRateDetect'
+    # log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRate'
+    log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
         plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:1', activation)
     else:

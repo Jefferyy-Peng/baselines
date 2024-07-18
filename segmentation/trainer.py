@@ -128,43 +128,43 @@ class SemanticSeg(object):
 
         # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
         # using UNet need to disable all sigmoid activation function
-        self.net = DataParallel(torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
-                                  in_channels=3, out_channels=4 , init_features=32, pretrained=False))
+        # self.net = DataParallel(torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+        #                           in_channels=3, out_channels=4 , init_features=32, pretrained=False))
 
-        # sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
-        #
-        # # # Create LoRA configuration
-        # # lora_config = LoraConfig(
-        # #     task_type=TaskType.SEGMENTATION,  # Specify the task type
-        # #     inference_mode=False,
-        # #     r=4,  # Rank
-        # #     lora_alpha=32,  # Scaling factor
-        # #     lora_dropout=0.1,  # Dropout rate
-        # # )
-        # #
-        # # # Apply LoRA to the image encoder
-        # # sam_model.image_encoder = get_peft_model(sam_model.image_encoder, lora_config)
-        #
-        # dense_model = ModelEmb()
-        # multi_mask_decoder = MaskDecoder(
-        #     num_multimask_outputs=4,
-        #     transformer=TwoWayTransformer(
-        #         depth=2,
-        #         embedding_dim=256,
-        #         mlp_dim=2048,
-        #         num_heads=8,
-        #     ),
-        #     transformer_dim=256,
-        #     iou_head_depth=3,
-        #     iou_head_hidden_dim=256,
+        sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
+
+        # # Create LoRA configuration
+        # lora_config = LoraConfig(
+        #     task_type=TaskType.SEGMENTATION,  # Specify the task type
+        #     inference_mode=False,
+        #     r=4,  # Rank
+        #     lora_alpha=32,  # Scaling factor
+        #     lora_dropout=0.1,  # Dropout rate
         # )
-        # self.net = DataParallel(MedSAMAUTOMULTI(
-        #         image_encoder=sam_model.image_encoder,
-        #         mask_decoder=multi_mask_decoder,
-        #         prompt_encoder=sam_model.prompt_encoder,
-        #         dense_encoder=dense_model,
-        #         image_size=512
-        #     ))
+        #
+        # # Apply LoRA to the image encoder
+        # sam_model.image_encoder = get_peft_model(sam_model.image_encoder, lora_config)
+
+        dense_model = ModelEmb()
+        multi_mask_decoder = MaskDecoder(
+            num_multimask_outputs=4,
+            transformer=TwoWayTransformer(
+                depth=2,
+                embedding_dim=256,
+                mlp_dim=2048,
+                num_heads=8,
+            ),
+            transformer_dim=256,
+            iou_head_depth=3,
+            iou_head_hidden_dim=256,
+        )
+        self.net = DataParallel(MedSAMAUTOMULTI(
+                image_encoder=sam_model.image_encoder,
+                mask_decoder=multi_mask_decoder,
+                prompt_encoder=sam_model.prompt_encoder,
+                dense_encoder=dense_model,
+                image_size=512
+            ))
 
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
         #

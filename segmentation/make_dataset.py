@@ -99,7 +99,7 @@ def make_segdata(base_dir,label_dir,output_dir):
         save_as_hdf5(seg_image,hdf5_path,'seg')
 
         # count -> path for lesion, path -> count for gland and zone
-        pid_dict[count] = path
+        pid_dict[path] = count
         store_images_labels_2d(data_dir_2d,count,img,seg_image)
 
         count += 1
@@ -192,9 +192,9 @@ def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
 
 if __name__ == "__main__":
     phase = 'seg'
-    base_dir = '../output_lesion_human/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
-    label_dir = '../output_lesion_human/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
-    output_dir = './dataset/lesion_segdata_human_all'
+    base_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
+    label_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
+    output_dir = './dataset/gland_segdata'
     test_dir = 'path/to/nnUNet_test_data'
     seg_dir = 'path/to/segmentation_result'
     csv_path = 'path/to/classification_result'
