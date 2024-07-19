@@ -426,7 +426,7 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
     net.load_state_dict(new_state_dict)
     net.eval()
     net.to(device)
-    net = DataParallel(net)
+    net = DataParallel(net, device_ids=[0, 1, 2, 3, 4, 5])
     plot_path = os.path.join(log_dir, 'plots')
     os.makedirs(plot_path, exist_ok=True)
 
@@ -608,43 +608,43 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
 
 
 if __name__ == '__main__':
-    PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
-    PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
-    train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
+    # PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
+    # PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
+    # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
 
-    # PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
-    # AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
-    # train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
+    PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
+    AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
+    train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
 
     mode = 'normal'
 
-    activation = False
+    activation = True
 
-    net = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
-                                           in_channels=3, out_channels=4, init_features=32, pretrained=False)
+    # net = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+    #                                        in_channels=3, out_channels=4, init_features=32, pretrained=False)
 
-    # sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
-    # dense_model = ModelEmb()
-    # multi_mask_decoder = MaskDecoder(
-    #     num_multimask_outputs=4,
-    #     transformer=TwoWayTransformer(
-    #         depth=2,
-    #         embedding_dim=256,
-    #         mlp_dim=2048,
-    #         num_heads=8,
-    #     ),
-    #     transformer_dim=256,
-    #     iou_head_depth=3,
-    #     iou_head_hidden_dim=256,
-    # )
-    # net = MedSAMAUTOMULTI(
-    #     image_encoder=sam_model.image_encoder,
-    #     mask_decoder=multi_mask_decoder,
-    #     prompt_encoder=sam_model.prompt_encoder,
-    #     dense_encoder=dense_model,
-    #     image_size=512,
-    #     mode=mode
-    # )
+    sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
+    dense_model = ModelEmb()
+    multi_mask_decoder = MaskDecoder(
+        num_multimask_outputs=4,
+        transformer=TwoWayTransformer(
+            depth=2,
+            embedding_dim=256,
+            mlp_dim=2048,
+            num_heads=8,
+        ),
+        transformer_dim=256,
+        iou_head_depth=3,
+        iou_head_hidden_dim=256,
+    )
+    net = MedSAMAUTOMULTI(
+        image_encoder=sam_model.image_encoder,
+        mask_decoder=multi_mask_decoder,
+        prompt_encoder=sam_model.prompt_encoder,
+        dense_encoder=dense_model,
+        image_size=512,
+        mode=mode
+    )
 
     # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
     #
@@ -656,14 +656,14 @@ if __name__ == '__main__':
     #     image_size=512
     # )
 
-    PHASE = 'seg'
+    PHASE = 'detect'
 
-    # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
+    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Focal_Dice_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
+    # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    # log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRate'
-    log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
+    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateFocalDice'
+    # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
-        plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:1', activation)
+        plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:0', activation)
     else:
-        plot_eval_detect(net, val_AP, ckpt_path, log_dir, 'cuda', activation, mode)
+        plot_eval_detect(net, val_AP, ckpt_path, log_dir, 'cuda:0', activation, mode)
