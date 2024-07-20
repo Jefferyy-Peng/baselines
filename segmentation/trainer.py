@@ -11,6 +11,7 @@ from matplotlib import pyplot as plt
 from picai_eval import evaluate, Metrics
 from picai_eval.eval import evaluate_case
 from report_guided_annotation import extract_lesion_candidates
+from scipy.ndimage import gaussian_filter
 from torch.utils.tensorboard import SummaryWriter
 from torch.cuda.amp import GradScaler
 from torch.cuda.amp import autocast as autocast
@@ -19,17 +20,19 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
+from picai_baseline.unet.training_setup.neural_networks.unets import UNet
 
 from segment_anything import sam_model_registry
 from model_single import ModelEmb, SegDecoderCNN
 from peft import get_peft_model, LoraConfig, TaskType
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
-                         RandomRotate2D, To_Tensor, MultiLevelDataGenerator)
+                         RandomRotate2D, To_Tensor, MultiLevelDataGenerator, MultiLevel3DDataGenerator)
 from loss import Deep_Supervised_Loss
 from model import itunet_2d
 from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from segmentation.config import PATH_DIR
+from segmentation.utils import plot_segmentation2D
 from segmentation.segment_anything.modeling import MaskDecoder, TwoWayTransformer
 from utils import dfs_remove_weight, poly_lr, compute_results_detect
 from monai.networks.nets import SwinUNETR
@@ -38,61 +41,18 @@ from TransUNet import VisionTransformer, CONFIGS
 
 warnings.filterwarnings('ignore')
 
-def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=None):
-    """
-        Plot each slice of a 3D image, its corresponding previous mask, and ground truth mask.
-
-        Parameters:
-        img3D (numpy.ndarray): The 3D image array of shape (depth, height, width).
-        prev_masks (numpy.ndarray): The 3D array of previous masks of shape (depth, height, width).
-        gt3D (numpy.ndarray): The 3D array of ground truth masks of shape (depth, height, width).
-        slice_axis (int): The axis along which to slice the image (0=depth, 1=height, 2=width).
-        """
-    os.makedirs(save_path, exist_ok=True)
-    # Determine the number of slices based on the selected axis
-
-    # Iterate over each slice
-    fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 8))
-
-        # Plot image slice
-    ax = axes[0]
-    ax.imshow(img2D, cmap='gray')
-    ax.set_title(f'Image')
-    ax.axis('off')
-
-        # Plot previous mask slice
-    cmap = plt.cm.get_cmap('viridis', 2)
-    cmap.colors[0, 3] = 0
-    ax = axes[1]
-    ax.imshow(img2D, cmap='gray')
-    ax.imshow(prev_masks, cmap=cmap, alpha=0.5)
-    ax.set_title(f'Predict Mask')
-    ax.axis('off')
-
-        # Plot ground truth slice
-    cmap = plt.cm.get_cmap('viridis', 2)
-    cmap.colors[0, 3] = 0
-    ax = axes[2]
-    ax.imshow(img2D, cmap='gray')
-    ax.imshow(gt2D, cmap=cmap, alpha=0.5)
-    ax.set_title(f'Ground Truth')
-    ax.axis('off')
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_path, f'slice_{count}'))
-    plt.close()
-
 
 def compute_results(logits, target, results):
     preds = []
     logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits
+
     for slices in logits:
-        preds.append(extract_lesion_candidates(np.expand_dims(slices, axis=-1), threshold=0.5)[0])
+        preds.append(extract_lesion_candidates(slices, threshold=0.5)[0])
     for y_det, y_true in zip(preds,
-                             [target[:, i, :, :] for i in range(target.shape[1])]):
+                             [target[i] for i in range(target.shape[0])]):
         y_list, *_ = evaluate_case(
             y_det=y_det,
-            y_true=y_true.transpose(1, 2, 0),
+            y_true=y_true,
         )
 
         # aggregate all validation evaluations
@@ -131,7 +91,7 @@ class SemanticSeg(object):
         # self.net = DataParallel(torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
         #                           in_channels=3, out_channels=4 , init_features=32, pretrained=False))
 
-        sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
+        # sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
 
         # # Create LoRA configuration
         # lora_config = LoraConfig(
@@ -145,26 +105,26 @@ class SemanticSeg(object):
         # # Apply LoRA to the image encoder
         # sam_model.image_encoder = get_peft_model(sam_model.image_encoder, lora_config)
 
-        dense_model = ModelEmb()
-        multi_mask_decoder = MaskDecoder(
-            num_multimask_outputs=4,
-            transformer=TwoWayTransformer(
-                depth=2,
-                embedding_dim=256,
-                mlp_dim=2048,
-                num_heads=8,
-            ),
-            transformer_dim=256,
-            iou_head_depth=3,
-            iou_head_hidden_dim=256,
-        )
-        self.net = DataParallel(MedSAMAUTOMULTI(
-                image_encoder=sam_model.image_encoder,
-                mask_decoder=multi_mask_decoder,
-                prompt_encoder=sam_model.prompt_encoder,
-                dense_encoder=dense_model,
-                image_size=512
-            ))
+        # dense_model = ModelEmb()
+        # multi_mask_decoder = MaskDecoder(
+        #     num_multimask_outputs=4,
+        #     transformer=TwoWayTransformer(
+        #         depth=2,
+        #         embedding_dim=256,
+        #         mlp_dim=2048,
+        #         num_heads=8,
+        #     ),
+        #     transformer_dim=256,
+        #     iou_head_depth=3,
+        #     iou_head_hidden_dim=256,
+        # )
+        # self.net = DataParallel(MedSAMAUTOMULTI(
+        #         image_encoder=sam_model.image_encoder,
+        #         mask_decoder=multi_mask_decoder,
+        #         prompt_encoder=sam_model.prompt_encoder,
+        #         dense_encoder=dense_model,
+        #         image_size=512
+        #     ))
 
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
         #
@@ -176,16 +136,23 @@ class SemanticSeg(object):
         #     image_size=512
         # ).to(device))
 
+        self.net = DataParallel(UNet(
+            spatial_dims=3,
+            in_channels=3,
+            out_channels=4,
+            strides=[(2, 2, 2), (1, 2, 2), (1, 2, 2), (1, 2, 2), (2, 2, 2)],
+            channels=[32, 64, 128, 256, 512, 1024]
+        ), device_ids=[0, 1, 2, 3, 4, 5]).to(device)
+
 
         if self.pre_trained:
             self._get_pre_trained(self.weight_path,ckpt_point)
 
         self.train_transform = [
-            Normalize(),   #1
-            # tio.CropOrPad(target_shape=(32, 128, 128)),
-            RandomRotate2D(),  #6
-            RandomFlip2D(mode='hv'),  #7
-            To_Tensor(num_class=self.num_classes, input_channel = self.channels)   # 10
+            tio.Resize((24, 256, 256)),
+            tio.RescaleIntensity(out_min_max=(0, 1)),  # Rescale intensity to [0, 1]
+            tio.RandomAffine(scales=(0.9, 1.1), degrees=10),  # Random affine transformation
+            tio.RandomFlip(axes=(0, 1, 2)),  # Random flip along each axis
         ]
 
     def plot_eval(self, number_plots, val_path, ckpt_path, log_dir, device):
@@ -274,7 +241,7 @@ class SemanticSeg(object):
         lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
         zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
         gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
-        train_dataset = MultiLevelDataGenerator(train_path, 'train', num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+        train_dataset = MultiLevel3DDataGenerator(train_path, 'random', num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
 
         train_loader = DataLoader(
           train_dataset,
@@ -284,12 +251,10 @@ class SemanticSeg(object):
           pin_memory=True
         )
         val_transformer = transforms.Compose([
-            Normalize(),
-            # tio.Resize(target_shape=(24, 128, 128)),
-            # tio.CropOrPad(target_shape=(32, 128, 128)),
-            To_Tensor(num_class=self.num_classes, input_channel=self.channels)
+            tio.Resize((24, 256, 256)),
+            tio.RescaleIntensity(out_min_max=(0, 1)),  # Rescale intensity to [0, 1]
         ])
-        val_dataset = MultiLevelDataGenerator(val_path, 'val', num_class=self.num_classes,transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+        val_dataset = MultiLevel3DDataGenerator(val_path, 'random', num_class=self.num_classes,transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
         val_loader = DataLoader(
             val_dataset,
             batch_size=self.batch_size,
@@ -307,7 +272,7 @@ class SemanticSeg(object):
 
         scaler = GradScaler()
 
-        early_stopping = EarlyStopping(patience=10,verbose=True,monitor='val_score',op_type='max')
+        early_stopping = EarlyStopping(patience=30,verbose=True,monitor='val_score',op_type='max')
 
         epoch = self.start_epoch
         optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr = lr)
@@ -411,32 +376,21 @@ class SemanticSeg(object):
         from metrics import RunningDice
         run_dice = RunningDice(labels=range(self.num_classes),ignore_label=-1)
 
-        for step, (sample, pid, slice) in enumerate(tqdm(train_loader)):
-            lesion_targets = []
-            zone_targets = []
-            gland_targets = []
-            for name, value in sample.items():
-                if name == 'ct':
-                    data = value
-                elif 'lesion' in name:
-                    lesion_targets.append(value)
-                elif 'gland' in name:
-                    gland_targets.append(value)
-                elif 'zone' in name:
-                    zone_targets.append(value)
-            lesion_target = torch.stack(lesion_targets)
-            zone_target = torch.stack(zone_targets)
-            gland_target = torch.stack(gland_targets)
-            multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).permute(1, 0, 2, 3)
+        for step, (sample, pid) in enumerate(tqdm(train_loader)):
+            data = sample['ct']
+            seg = sample['seg']
+            lesion_target = seg[:,3]
+            zone_target = seg[:,1:3]
+            gland_target = seg[:, 0]
 
             data = data.to(self.device)
-            multi_level_targets = multi_level_targets.to(self.device)
+            seg = seg.to(self.device)
 
             with autocast(self.use_fp16):
                 output = net(data)
                 if isinstance(output,tuple):
                     output = output[0]
-                loss = criterion(output, multi_level_targets)
+                loss = criterion(output, seg)
                 # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1))
 
             optimizer.zero_grad()
@@ -452,7 +406,7 @@ class SemanticSeg(object):
             loss = loss.float()
 
             # dice = compute_dice(output.detach(),multi_level_targets[:, -1].unsqueeze(1), activation=activation)
-            dice = compute_dice(output.detach(), multi_level_targets, activation=activation)
+            dice = compute_dice(output.detach(), seg, activation=activation)
             average_dice = torch.mean(dice, dim=1)
             train_loss.update(loss.item(),data.size(0))
             gland_train_dice.update(average_dice[0],data.size(0))
@@ -483,7 +437,7 @@ class SemanticSeg(object):
         return train_loss.avg,gland_train_dice.avg,zone_train_dice.avg,lesion_train_dice.avg
 
 
-    def _val_on_epoch(self,epoch,net,criterion,val_loader,val_transformer=None, activation=True):
+    def _val_on_epoch(self,epoch,net,criterion,val_loader,val_transformer=None, activation=True, plot=False):
         net.eval()
 
         val_loss = AverageMeter()
@@ -499,64 +453,74 @@ class SemanticSeg(object):
         pz_results = []
         positive_dice = []
         with torch.no_grad():
-            for step,(sample, pid, slice) in enumerate(tqdm(val_loader)):
-                lesion_targets = []
-                zone_targets = []
-                gland_targets = []
-                for name, value in sample.items():
-                    if name == 'ct':
-                        data = value
-                    elif 'lesion' in name:
-                        lesion_targets.append(value)
-                    elif 'gland' in name:
-                        gland_targets.append(value)
-                    elif 'zone' in name:
-                        zone_targets.append(value)
-                lesion_target = torch.stack(lesion_targets)
-                zone_target = torch.stack(zone_targets)
-                gland_target = torch.stack(gland_targets)
-                multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).permute(1, 0, 2, 3)
+            for step,(sample, pid) in enumerate(tqdm(val_loader)):
+                data = sample['ct']
+                seg = sample['seg']
+                lesion_target = seg[:, 3]
+                zone_target = seg[:, 1:3]
+                gland_target = seg[:, 0]
 
                 data = data.to(self.device)
-                multi_level_targets = multi_level_targets.to(self.device)
-                with autocast(self.use_fp16):
-                    output = net(data)
-                    if isinstance(output,tuple):
-                        output = output[0]
-                # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1).float())
-                loss = criterion(output, multi_level_targets.float())
+                seg = seg.to(self.device)
+                data = [data, torch.flip(data, [4]).to('cuda')]
 
-                output = output.float()
-                loss = loss.float()
+                # aggregate all validation predictions
+                # gaussian blur to counteract checkerboard artifacts in
+                # predictions from the use of transposed conv. in the U-Net
+                preds = [
+                    torch.sigmoid(net(x)).detach().cpu().numpy()
+                    for x in data
+                ]
+
+                # revert horizontally flipped tta image
+                preds[1] = np.flip(preds[1], [4])
+
+                # gaussian blur to counteract checkerboard artifacts in
+                # predictions from the use of transposed conv. in the U-Net
+                preds = np.mean([
+                    np.stack([gaussian_filter(x[:, i, ...], sigma=1.5) for i in range(x.shape[1])], axis=1)
+                    for x in preds
+                ], axis=0)
+                # with autocast(self.use_fp16):
+                #     output = net(data)
+                #     if isinstance(output,tuple):
+                #         output = output[0]
+                # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1).float())
+                # loss = criterion(output, seg.float())
+                loss = 0
+                output = preds
+                if plot:
+                    for id, img in enumerate(data[0]):
+                        for sliceid, slice in enumerate(img.permute(1, 2, 3, 0)):
+                            plot_segmentation2D(slice.detach().cpu().numpy(), preds[id, -1, sliceid, ...], lesion_target[id, sliceid, ...].detach().cpu().numpy(), f'./test', f'{id}_{sliceid}', image_dice=None)
+
+                # output = output.float()
+                # loss = loss.float()
 
                 # dice = compute_dice(output.detach(),multi_level_targets[:, -1].unsqueeze(1),activation=activation)
-                dice = compute_dice(output.detach(), multi_level_targets, activation=activation)
+                dice = compute_dice(torch.Tensor(output).to('cuda'), seg, activation=False)
                 average_dice = torch.mean(dice, dim=1)
-                for id, target in enumerate(lesion_target[0]):
+                for id, target in enumerate(lesion_target):
                     if target.max() > 0:
                         positive_dice.append(dice[-1, id])
-                val_loss.update(loss.item(),data.size(0))
-                gland_val_dice.update(average_dice[0], data.size(0))
-                zone_val_dice.update(sum(average_dice[1:3]) / 2, data.size(0))
-                lesion_val_dice.update(average_dice[3], data.size(0))
+                val_loss.update(loss,data[0].size(0))
+                gland_val_dice.update(average_dice[0], data[0].size(0))
+                zone_val_dice.update(sum(average_dice[1:3]) / 2, data[0].size(0))
+                lesion_val_dice.update(average_dice[3], data[0].size(0))
                 # lesion_val_dice.update(average_dice[0], data.size(0))
 
-                if activation:
-                    logits = torch.sigmoid(output)
-                else:
-                    logits = output
-                output = (logits > 0.5).int().detach().cpu().numpy()  # N*H*W
+                # output = (output > 0.5).astype(np.int16)  # N*H*W
                 # target = target.detach().cpu().numpy()
                 # run_dice.update_matrix(target,output)
 
-                lesion_results = compute_results(logits[:, -1, :, :], lesion_target.detach().cpu().numpy(), lesion_results)
+                lesion_results = compute_results(output[:, -1, ...], lesion_target.detach().cpu().numpy(), lesion_results)
 
                 torch.cuda.empty_cache()
 
                 if step % 1 == 0:
                     # rundice, dice_list = run_dice.compute_dice()
                     # print("Category Dice: ", dice_list)
-                    print('Eval epoch:{}/{},step:{},val_loss:{:.5f},gland_val_dice:{:.5f},zone_val_dice:{:.5f},lesion_val_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss.item(), gland_val_dice.avg, zone_val_dice.avg, lesion_val_dice.avg))
+                    print('Eval epoch:{}/{},step:{},val_loss:{:.5f},gland_val_dice:{:.5f},zone_val_dice:{:.5f},lesion_val_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss, gland_val_dice.avg, zone_val_dice.avg, lesion_val_dice.avg))
                     # run_dice.init_op()
                     # self.writer.add_scalar(
                     #     'data/eval_loss', loss.item(), self.global_step

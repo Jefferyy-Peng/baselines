@@ -105,7 +105,7 @@ def make_segdata(base_dir,label_dir,output_dir):
         count += 1
 
     print(count)
-    pickle.dump(pid_dict, open(os.path.join(output_dir ,'lesion_pid.p'), 'wb'))
+    pickle.dump(pid_dict, open(os.path.join(output_dir ,'gland_pid.p'), 'wb'))
 
 def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
 

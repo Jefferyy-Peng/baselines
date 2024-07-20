@@ -8,6 +8,7 @@ from torchvision import transforms
 
 from segmentation.config import PATH_DIR
 from utils import hdf5_reader
+import torchio as tio
 
 
 class Normalize(object):
@@ -357,3 +358,102 @@ class MultiLevelDataGenerator(Dataset):
             sample = self.transform(sample)
 
         return sample, lesion_pid, lesion_slice
+
+
+class MultiLevel3DDataGenerator(Dataset):
+    '''
+    Custom Dataset class for data loader.
+    Args：
+    - path_list: list of file path
+    - roi_number: integer or None, to extract the corresponding label
+    - num_class: the number of classes of the label
+    - transform: the data augmentation methods
+    '''
+
+    def __init__(self, lesion_path_list, mode, num_class=2, transform=None, zone_pid=None, lesion_pid=None, gland_pid=None):
+        new_path_list1 = []
+        new_path_list2 = []
+        new_path_list = []
+        ratios = []
+        for idx, path in enumerate(lesion_path_list):
+            lesion_seg = torch.Tensor(hdf5_reader(lesion_path_list[idx], 'seg'))
+            lesion_count = lesion_path_list[idx].split('/')[-1].split('.')[0]
+            this_lesion_pid = lesion_pid[int(lesion_count)]
+            if this_lesion_pid == '10705_1000721':
+                continue
+            tumor_ratio = lesion_seg.sum() / (lesion_seg.shape[0] * lesion_seg.shape[1])
+            new_path_list.append(path)
+            if tumor_ratio != 0:
+                ratios.append(tumor_ratio)
+            if tumor_ratio > 0.001:
+                new_path_list2.append(path)
+            else:
+                new_path_list1.append(path)
+        self.path_list = new_path_list
+        self.mode = mode
+        self.path_list1 = new_path_list1
+        self.path_list2 = new_path_list2
+        self.num_class = num_class
+        self.transform = transform
+        self.zone_pid = zone_pid
+        self.gland_pid = gland_pid
+        self.lesion_pid = lesion_pid
+
+    def __len__(self):
+        return len(self.path_list1) + len(self.path_list2)
+
+    def __getitem__(self, index):
+        if self.mode == 'random':
+            path = self.path_list[index]
+            ct = torch.Tensor(hdf5_reader(path, 'ct'))
+            lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
+        elif self.mode == 'val':
+            if index >= len(self.path_list1):
+                path = self.path_list2[index % len(self.path_list1)]
+                ct = torch.Tensor(hdf5_reader(path, 'ct'))
+                lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
+            else:
+                path = self.path_list1[index]
+                ct = torch.Tensor(hdf5_reader(path, 'ct'))
+                lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
+        else:
+            if np.random.choice(2, 1, p=[1-0.5, 0.5]) == 0:
+                index = index % len(self.path_list1)
+                #index = np.random.randint(len(self.img_path1))
+                path = self.path_list1[index]
+                ct = torch.Tensor(hdf5_reader(path, 'ct'))
+                lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
+            else:
+                index = np.random.randint(len(self.path_list2))
+                path = self.path_list2[index]
+                ct = torch.Tensor(hdf5_reader(path, 'ct'))
+                lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
+
+        lesion_count = path.split('/')[-1].split('.')[0]
+        lesion_pid = self.lesion_pid[int(lesion_count)]
+        zone_count = self.zone_pid[lesion_pid]
+        gland_count = self.gland_pid[lesion_pid]
+        # use zone_segdata_all for all data
+        zone_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
+        gland_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
+        lesion_seg = create_binary_masks(lesion_seg)
+        zone_seg = create_binary_masks_zone(zone_seg)
+        gland_seg = create_binary_masks(gland_seg)
+        segs = torch.cat([gland_seg, zone_seg, lesion_seg])
+        # Convert to TorchIO Images
+        image = tio.ScalarImage(tensor=ct)
+        label = tio.LabelMap(tensor=segs)
+
+        # Create a subject with image and label
+        subject = tio.Subject(
+            image=image,
+            label=label
+        )
+
+        subject = self.transform(subject)
+        sample = {}
+
+        sample['ct'] = subject.image.data
+        sample['seg'] = subject.label.data
+
+        return sample, lesion_pid
