@@ -1,8 +1,11 @@
 import random
+from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 import torch
 from PIL import Image
+from monai.transforms import Randomizable
+from monai.utils import MAX_SEED
 from torch.utils.data import Dataset
 from torchvision import transforms
 
@@ -360,7 +363,7 @@ class MultiLevelDataGenerator(Dataset):
         return sample, lesion_pid, lesion_slice
 
 
-class MultiLevel3DDataGenerator(Dataset):
+class MultiLevel3DDataGenerator(Dataset, Randomizable):
     '''
     Custom Dataset class for data loader.
     Args：
@@ -398,9 +401,13 @@ class MultiLevel3DDataGenerator(Dataset):
         self.zone_pid = zone_pid
         self.gland_pid = gland_pid
         self.lesion_pid = lesion_pid
+        self.weight = np.array([len(new_path_list2), len(new_path_list1)]) / (len(self.path_list1) + len(self.path_list2))
 
     def __len__(self):
         return len(self.path_list1) + len(self.path_list2)
+
+    def randomize(self, data: Optional[Any] = None) -> None:
+        self._seed = self.R.randint(MAX_SEED, dtype="uint32")
 
     def __getitem__(self, index):
         if self.mode == 'random':
@@ -441,19 +448,15 @@ class MultiLevel3DDataGenerator(Dataset):
         gland_seg = create_binary_masks(gland_seg)
         segs = torch.cat([gland_seg, zone_seg, lesion_seg])
         # Convert to TorchIO Images
-        image = tio.ScalarImage(tensor=ct)
-        label = tio.LabelMap(tensor=segs)
+        # image = tio.ScalarImage(tensor=ct)
+        # label = tio.LabelMap(tensor=segs)
 
         # Create a subject with image and label
-        subject = tio.Subject(
-            image=image,
-            label=label
-        )
+        # subject = tio.Subject(
+        #     image=image,
+        #     label=label
+        # )
 
-        subject = self.transform(subject)
-        sample = {}
+        # subject = self.transform(subject)
 
-        sample['ct'] = subject.image.data
-        sample['seg'] = subject.label.data
-
-        return sample, lesion_pid
+        return tuple([ct, segs])
