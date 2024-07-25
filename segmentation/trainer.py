@@ -31,56 +31,13 @@ from model import itunet_2d
 from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from segmentation.config import PATH_DIR
 from segmentation.segment_anything.modeling import MaskDecoder, TwoWayTransformer
-from utils import dfs_remove_weight, poly_lr, compute_results_detect
+from utils import dfs_remove_weight, poly_lr, compute_results_detect, plot_segmentation2D
 from monai.networks.nets import SwinUNETR
 import torchio as tio
 from TransUNet import VisionTransformer, CONFIGS
 
 warnings.filterwarnings('ignore')
 
-def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=None):
-    """
-        Plot each slice of a 3D image, its corresponding previous mask, and ground truth mask.
-
-        Parameters:
-        img3D (numpy.ndarray): The 3D image array of shape (depth, height, width).
-        prev_masks (numpy.ndarray): The 3D array of previous masks of shape (depth, height, width).
-        gt3D (numpy.ndarray): The 3D array of ground truth masks of shape (depth, height, width).
-        slice_axis (int): The axis along which to slice the image (0=depth, 1=height, 2=width).
-        """
-    os.makedirs(save_path, exist_ok=True)
-    # Determine the number of slices based on the selected axis
-
-    # Iterate over each slice
-    fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 8))
-
-        # Plot image slice
-    ax = axes[0]
-    ax.imshow(img2D, cmap='gray')
-    ax.set_title(f'Image')
-    ax.axis('off')
-
-        # Plot previous mask slice
-    cmap = plt.cm.get_cmap('viridis', 2)
-    cmap.colors[0, 3] = 0
-    ax = axes[1]
-    ax.imshow(img2D, cmap='gray')
-    ax.imshow(prev_masks, cmap=cmap, alpha=0.5)
-    ax.set_title(f'Predict Mask')
-    ax.axis('off')
-
-        # Plot ground truth slice
-    cmap = plt.cm.get_cmap('viridis', 2)
-    cmap.colors[0, 3] = 0
-    ax = axes[2]
-    ax.imshow(img2D, cmap='gray')
-    ax.imshow(gt2D, cmap=cmap, alpha=0.5)
-    ax.set_title(f'Ground Truth')
-    ax.axis('off')
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_path, f'slice_{count}'))
-    plt.close()
 
 
 def compute_results(logits, target, results):
@@ -164,7 +121,7 @@ class SemanticSeg(object):
                 prompt_encoder=sam_model.prompt_encoder,
                 dense_encoder=dense_model,
                 image_size=512
-            ))
+            ), device_ids=[0, 1, 2, 3, 4, 5])
 
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
         #
@@ -262,7 +219,7 @@ class SemanticSeg(object):
 
         net = self.net
         lr = self.lr
-        loss = Deep_Supervised_Loss(mode='FocalDice', activation=activation)
+        loss = Deep_Supervised_Loss(mode='Focal', activation=activation)
 
         if len(self.device.split(',')) > 1:
             net = DataParallel(net)
@@ -400,7 +357,7 @@ class SemanticSeg(object):
         self.writer.close()
         dfs_remove_weight(output_dir,retain=3)
 
-    def _train_on_epoch(self,epoch,net,criterion,optimizer,train_loader,scaler, activation=True):
+    def _train_on_epoch(self,epoch,net,criterion,optimizer,train_loader,scaler, activation=True, plot=False):
         net.train()
 
         train_loss = AverageMeter()
@@ -416,6 +373,14 @@ class SemanticSeg(object):
             zone_targets = []
             gland_targets = []
             for name, value in sample.items():
+                order_correct = True
+                if name == 'zone_seg_0':
+                    var_a_assigned = True
+                elif name == 'zone_seg_1':
+                    var_b_assigned = True
+                    if var_a_assigned:
+                        order_correct = True
+                    else: order_correct = False
                 if name == 'ct':
                     data = value
                 elif 'lesion' in name:
@@ -438,6 +403,14 @@ class SemanticSeg(object):
                     output = output[0]
                 loss = criterion(output, multi_level_targets)
                 # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1))
+
+            if plot:
+                pred = torch.sigmoid(output)
+                for id, img in enumerate(data):
+                    plot_segmentation2D(img.permute(1, 2, 0).detach().cpu().numpy(),
+                                            (pred[id, -1, ...] > 0.5).detach().cpu(),
+                                            lesion_target[0, id, ...].detach().cpu().numpy(), f'./train_plot',
+                                            f'{id}', image_dice=None)
 
             optimizer.zero_grad()
             if self.use_fp16:
@@ -483,7 +456,7 @@ class SemanticSeg(object):
         return train_loss.avg,gland_train_dice.avg,zone_train_dice.avg,lesion_train_dice.avg
 
 
-    def _val_on_epoch(self,epoch,net,criterion,val_loader,val_transformer=None, activation=True):
+    def _val_on_epoch(self,epoch,net,criterion,val_loader,val_transformer=None, activation=True, plot=False):
         net.eval()
 
         val_loss = AverageMeter()
@@ -545,6 +518,12 @@ class SemanticSeg(object):
                     logits = torch.sigmoid(output)
                 else:
                     logits = output
+                if plot:
+                    for id, img in enumerate(data):
+                        plot_segmentation2D(img.permute(1, 2, 0).detach().cpu().numpy(),
+                                            (logits[id, -1, ...] > 0.5).detach().cpu(),
+                                            lesion_target[0, id, ...].detach().cpu().numpy(), f'./train_plot',
+                                            f'{id}', image_dice=None)
                 output = (logits > 0.5).int().detach().cpu().numpy()  # N*H*W
                 # target = target.detach().cpu().numpy()
                 # run_dice.update_matrix(target,output)

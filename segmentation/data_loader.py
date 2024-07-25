@@ -315,7 +315,7 @@ class MultiLevelDataGenerator(Dataset):
                 ct = torch.Tensor(hdf5_reader(path, 'ct'))
                 lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
         else:
-            if np.random.choice(2, 1, p=[1-0.5, 0.5]) == 0:
+            if np.random.choice(2, 1, p=[1-0.6, 0.6]) == 0:
                 index = index % len(self.path_list1)
                 #index = np.random.randint(len(self.img_path1))
                 path = self.path_list1[index]
