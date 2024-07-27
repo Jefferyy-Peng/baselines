@@ -608,13 +608,13 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
 
 
 if __name__ == '__main__':
-    # PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
-    # PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
-    # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
+    PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
+    PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
+    train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
 
-    PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
-    AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
-    train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
+    # PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
+    # AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
+    # train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
 
     mode = 'normal'
 
@@ -656,12 +656,12 @@ if __name__ == '__main__':
     #     image_size=512
     # )
 
-    PHASE = 'detect'
+    PHASE = 'seg'
 
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Focal_Dice_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
+    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateFocalDice'
+    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateUpdate'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
         plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:0', activation)
