@@ -259,42 +259,14 @@ class MultiLevelDataGenerator(Dataset):
     - transform: the data augmentation methods
     '''
 
-    def __init__(self, lesion_path_list, mode, num_class=2, transform=None, zone_pid=None, lesion_pid=None, gland_pid=None):
-        new_path_list1 = []
-        new_path_list2 = []
-        ratios = []
-        for idx, path in enumerate(lesion_path_list):
-            lesion_seg = torch.Tensor(hdf5_reader(lesion_path_list[idx], 'seg'))
-            lesion_count = lesion_path_list[idx].split('/')[-1].split('_')[0]
-            this_lesion_pid = lesion_pid[int(lesion_count)]
-            if this_lesion_pid == '10705_1000721':
-                continue
-            lesion_slice = lesion_path_list[idx].split('/')[-1].split('_')[1].split('.')[0]
-            this_zone_count = zone_pid[this_lesion_pid]
-            this_gland_count = gland_pid[this_lesion_pid]
-            # try:
-            #     zone_seg = torch.Tensor(hdf5_reader(
-            #         lesion_path_list[idx].replace(PATH_DIR.split('/')[2], 'zone_segdata_all').replace(
-            #             '/' + str(lesion_count), '/' + str(this_zone_count)), 'seg'))
-            #     gland_seg = torch.Tensor(hdf5_reader(
-            #         lesion_path_list[idx].replace(PATH_DIR.split('/')[2], 'gland_segdata').replace(
-            #             '/' + str(lesion_count), '/' + str(this_gland_count)), 'seg'))
-            # except:
-            #     print('here1')
-            #     continue
-            # if len(np.unique(zone_seg)) != 3:
-            #     print('here2')
-            #     continue
-            tumor_ratio = lesion_seg.sum() / (lesion_seg.shape[0] * lesion_seg.shape[1])
-            if tumor_ratio != 0:
-                ratios.append(tumor_ratio)
-            if tumor_ratio > 0.001:
-                new_path_list2.append(path)
-            else:
-                new_path_list1.append(path)
+    def __init__(self, gland_path_list, mode, num_class=2, transform=None, zone_pid=None, lesion_pid=None, gland_pid=None):
+        # for idx, path in enumerate(gland_path_list):
+        #     lesion_seg = torch.Tensor(hdf5_reader(gland_path_list[idx], 'seg'))
+        #     lesion_count = gland_path_list[idx].split('/')[-1].split('_')[0]
+        #     this_lesion_pid = lesion_pid[int(lesion_count)]
+
         self.mode = mode
-        self.path_list1 = new_path_list1
-        self.path_list2 = new_path_list2
+        self.path_list = gland_path_list
         self.num_class = num_class
         self.transform = transform
         self.zone_pid = zone_pid
@@ -302,10 +274,14 @@ class MultiLevelDataGenerator(Dataset):
         self.lesion_pid = lesion_pid
 
     def __len__(self):
-        return len(self.path_list1) + len(self.path_list2)
+        return len(self.path_list)
 
     def __getitem__(self, index):
-        if self.mode == 'val':
+        if self.mode == 'normal':
+            path = self.path_list[index]
+            ct = torch.Tensor(hdf5_reader(path, 'ct'))
+            lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
+        elif self.mode == 'val':
             if index >= len(self.path_list1):
                 path = self.path_list2[index % len(self.path_list1)]
                 ct = torch.Tensor(hdf5_reader(path, 'ct'))
@@ -327,33 +303,20 @@ class MultiLevelDataGenerator(Dataset):
                 ct = torch.Tensor(hdf5_reader(path, 'ct'))
                 lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
 
-        lesion_count = path.split('/')[-1].split('_')[0]
-        lesion_pid = self.lesion_pid[int(lesion_count)]
-        lesion_slice = path.split('/')[-1].split('_')[1].split('.')[0]
-        zone_count = self.zone_pid[lesion_pid]
-        gland_count = self.gland_pid[lesion_pid]
-        # use zone_segdata_all for all data
-        zone_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
-        gland_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
+        # lesion_count = path.split('/')[-1].split('_')[0]
+        # lesion_pid = self.lesion_pid[int(lesion_count)]
+        # lesion_slice = path.split('/')[-1].split('_')[1].split('.')[0]
         lesion_seg = create_binary_masks(lesion_seg)
-        zone_seg = create_binary_masks_zone(zone_seg)
-        gland_seg = create_binary_masks(gland_seg)
         transform = transforms.Resize(size=(1024, 1024))
         ct = transform(ct).numpy()
         seg_transform = transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)
         lesion_seg = seg_transform(lesion_seg)
-        zone_seg = seg_transform(zone_seg)
-        gland_seg = seg_transform(gland_seg)
 
         sample = {'ct': ct}
         for i in range(lesion_seg.shape[0]):
-            sample[f'lesion_seg_{i}'] = lesion_seg[i]
-        for i in range(zone_seg.shape[0]):
-            sample[f'zone_seg_{i}'] = zone_seg[i]
-        for i in range(gland_seg.shape[0]):
-            sample[f'gland_seg_{i}'] = gland_seg[i]
+            sample[f'gland_seg_{i}'] = lesion_seg[i]
         # Transform
         if self.transform is not None:
             sample = self.transform(sample)
 
-        return sample, lesion_pid, lesion_slice
+        return sample

@@ -46,7 +46,7 @@ def compute_results(logits, target, results):
     for slices in logits:
         preds.append(extract_lesion_candidates(np.expand_dims(slices, axis=-1), threshold=0.5)[0])
     for y_det, y_true in zip(preds,
-                             [target[:, i, :, :] for i in range(target.shape[1])]):
+                             [target[i, :, :, :] for i in range(target.shape[0])]):
         y_list, *_ = evaluate_case(
             y_det=y_det,
             y_true=y_true.transpose(1, 2, 0),
@@ -104,7 +104,7 @@ class SemanticSeg(object):
 
         dense_model = ModelEmb()
         multi_mask_decoder = MaskDecoder(
-            num_multimask_outputs=4,
+            num_multimask_outputs=1,
             transformer=TwoWayTransformer(
                 depth=2,
                 embedding_dim=256,
@@ -121,7 +121,7 @@ class SemanticSeg(object):
                 prompt_encoder=sam_model.prompt_encoder,
                 dense_encoder=dense_model,
                 image_size=512
-            ), device_ids=[0, 1, 2, 3, 4, 5])
+            ), device_ids=[0, 1, 2, 3, 4, 5, 6, 7])
 
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
         #
@@ -228,10 +228,10 @@ class SemanticSeg(object):
         train_transformer = transforms.Compose(self.train_transform)
 
 
-        lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
-        zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
+        # lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
+        # zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
         gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
-        train_dataset = MultiLevelDataGenerator(train_path, 'train', num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+        train_dataset = MultiLevelDataGenerator(train_path, 'normal', num_class=self.num_classes,transform=train_transformer, zone_pid=gland_pid, gland_pid=gland_pid, lesion_pid=gland_pid)
 
         train_loader = DataLoader(
           train_dataset,
@@ -246,7 +246,7 @@ class SemanticSeg(object):
             # tio.CropOrPad(target_shape=(32, 128, 128)),
             To_Tensor(num_class=self.num_classes, input_channel=self.channels)
         ])
-        val_dataset = MultiLevelDataGenerator(val_path, 'val', num_class=self.num_classes,transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+        val_dataset = MultiLevelDataGenerator(val_path, 'normal', num_class=self.num_classes,transform=val_transformer, zone_pid=gland_pid, gland_pid=gland_pid, lesion_pid=gland_pid)
         val_loader = DataLoader(
             val_dataset,
             batch_size=self.batch_size,
@@ -264,7 +264,7 @@ class SemanticSeg(object):
 
         scaler = GradScaler()
 
-        early_stopping = EarlyStopping(patience=10,verbose=True,monitor='val_score',op_type='max')
+        early_stopping = EarlyStopping(patience=20,verbose=True,monitor='val_score',op_type='max')
 
         epoch = self.start_epoch
         optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr = lr)
@@ -368,19 +368,11 @@ class SemanticSeg(object):
         from metrics import RunningDice
         run_dice = RunningDice(labels=range(self.num_classes),ignore_label=-1)
 
-        for step, (sample, pid, slice) in enumerate(tqdm(train_loader)):
+        for step, (sample) in enumerate(tqdm(train_loader)):
             lesion_targets = []
             zone_targets = []
             gland_targets = []
             for name, value in sample.items():
-                order_correct = True
-                if name == 'zone_seg_0':
-                    var_a_assigned = True
-                elif name == 'zone_seg_1':
-                    var_b_assigned = True
-                    if var_a_assigned:
-                        order_correct = True
-                    else: order_correct = False
                 if name == 'ct':
                     data = value
                 elif 'lesion' in name:
@@ -389,19 +381,15 @@ class SemanticSeg(object):
                     gland_targets.append(value)
                 elif 'zone' in name:
                     zone_targets.append(value)
-            lesion_target = torch.stack(lesion_targets)
-            zone_target = torch.stack(zone_targets)
-            gland_target = torch.stack(gland_targets)
-            multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).permute(1, 0, 2, 3)
+            gland_target = torch.stack(gland_targets).permute(1, 0, 2, 3).to(self.device)
 
             data = data.to(self.device)
-            multi_level_targets = multi_level_targets.to(self.device)
 
             with autocast(self.use_fp16):
                 output = net(data)
                 if isinstance(output,tuple):
                     output = output[0]
-                loss = criterion(output, multi_level_targets)
+                loss = criterion(output, gland_target)
                 # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1))
 
             if plot:
@@ -409,7 +397,7 @@ class SemanticSeg(object):
                 for id, img in enumerate(data):
                     plot_segmentation2D(img.permute(1, 2, 0).detach().cpu().numpy(),
                                             (pred[id, -1, ...] > 0.5).detach().cpu(),
-                                            lesion_target[0, id, ...].detach().cpu().numpy(), f'./train_plot',
+                                            gland_target[id, -1, ...].detach().cpu().numpy(), f'./train_plot',
                                             f'{id}', image_dice=None)
 
             optimizer.zero_grad()
@@ -425,13 +413,13 @@ class SemanticSeg(object):
             loss = loss.float()
 
             # dice = compute_dice(output.detach(),multi_level_targets[:, -1].unsqueeze(1), activation=activation)
-            dice = compute_dice(output.detach(), multi_level_targets, activation=activation)
+            dice = compute_dice(output.detach(), gland_target, activation=activation)
             average_dice = torch.mean(dice, dim=1)
             train_loss.update(loss.item(),data.size(0))
-            gland_train_dice.update(average_dice[0],data.size(0))
-            zone_train_dice.update(sum(average_dice[1:3]) / 2, data.size(0))
-            lesion_train_dice.update(average_dice[3], data.size(0))
-            # lesion_train_dice.update(average_dice[0], data.size(0))
+            # gland_train_dice.update(average_dice[0],data.size(0))
+            # zone_train_dice.update(sum(average_dice[1:3]) / 2, data.size(0))
+            # lesion_train_dice.update(average_dice[3], data.size(0))
+            lesion_train_dice.update(average_dice[0], data.size(0))
 
             # output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  #N*H*W
             # multi_level_targets = multi_level_targets.detach().cpu().numpy()
@@ -472,7 +460,7 @@ class SemanticSeg(object):
         pz_results = []
         positive_dice = []
         with torch.no_grad():
-            for step,(sample, pid, slice) in enumerate(tqdm(val_loader)):
+            for step, (sample) in enumerate(tqdm(val_loader)):
                 lesion_targets = []
                 zone_targets = []
                 gland_targets = []
@@ -485,34 +473,30 @@ class SemanticSeg(object):
                         gland_targets.append(value)
                     elif 'zone' in name:
                         zone_targets.append(value)
-                lesion_target = torch.stack(lesion_targets)
-                zone_target = torch.stack(zone_targets)
-                gland_target = torch.stack(gland_targets)
-                multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).permute(1, 0, 2, 3)
+                gland_target = torch.stack(gland_targets).permute(1, 0, 2, 3).to(self.device)
 
                 data = data.to(self.device)
-                multi_level_targets = multi_level_targets.to(self.device)
                 with autocast(self.use_fp16):
                     output = net(data)
                     if isinstance(output,tuple):
                         output = output[0]
                 # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1).float())
-                loss = criterion(output, multi_level_targets.float())
+                loss = criterion(output, gland_target.float())
 
                 output = output.float()
                 loss = loss.float()
 
                 # dice = compute_dice(output.detach(),multi_level_targets[:, -1].unsqueeze(1),activation=activation)
-                dice = compute_dice(output.detach(), multi_level_targets, activation=activation)
+                dice = compute_dice(output.detach(), gland_target, activation=activation)
                 average_dice = torch.mean(dice, dim=1)
-                for id, target in enumerate(lesion_target[0]):
+                for id, target in enumerate(gland_target[0]):
                     if target.max() > 0:
                         positive_dice.append(dice[-1, id])
                 val_loss.update(loss.item(),data.size(0))
-                gland_val_dice.update(average_dice[0], data.size(0))
-                zone_val_dice.update(sum(average_dice[1:3]) / 2, data.size(0))
-                lesion_val_dice.update(average_dice[3], data.size(0))
-                # lesion_val_dice.update(average_dice[0], data.size(0))
+                # gland_val_dice.update(average_dice[0], data.size(0))
+                # zone_val_dice.update(sum(average_dice[1:3]) / 2, data.size(0))
+                # lesion_val_dice.update(average_dice[3], data.size(0))
+                lesion_val_dice.update(average_dice[0], data.size(0))
 
                 if activation:
                     logits = torch.sigmoid(output)
@@ -522,13 +506,13 @@ class SemanticSeg(object):
                     for id, img in enumerate(data):
                         plot_segmentation2D(img.permute(1, 2, 0).detach().cpu().numpy(),
                                             (logits[id, -1, ...] > 0.5).detach().cpu(),
-                                            lesion_target[0, id, ...].detach().cpu().numpy(), f'./train_plot',
+                                            gland_target[id, -1, ...].detach().cpu().numpy(), f'./test',
                                             f'{id}', image_dice=None)
                 output = (logits > 0.5).int().detach().cpu().numpy()  # N*H*W
                 # target = target.detach().cpu().numpy()
                 # run_dice.update_matrix(target,output)
 
-                lesion_results = compute_results(logits[:, -1, :, :], lesion_target.detach().cpu().numpy(), lesion_results)
+                lesion_results = compute_results(logits[:, -1, :, :], gland_target.detach().cpu().numpy(), lesion_results)
 
                 torch.cuda.empty_cache()
 
