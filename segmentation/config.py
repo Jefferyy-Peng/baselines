@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'MedSAMAuto_Focal_Unified_rate_0.6'
+VERSION = 'MedSAMAuto_Focal_Unified_equal_rate_update'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3

@@ -295,6 +295,7 @@ class MultiLevelDataGenerator(Dataset):
         self.mode = mode
         self.path_list1 = new_path_list1
         self.path_list2 = new_path_list2
+        print(f'Got {len(new_path_list1)} slices with no or small lesion and {len(new_path_list2)} with sufficient lesion')
         self.num_class = num_class
         self.transform = transform
         self.zone_pid = zone_pid
@@ -315,7 +316,7 @@ class MultiLevelDataGenerator(Dataset):
                 ct = torch.Tensor(hdf5_reader(path, 'ct'))
                 lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
         else:
-            if np.random.choice(2, 1, p=[1-0.6, 0.6]) == 0:
+            if np.random.choice(2, 1, p=[1-0.5, 0.5]) == 0:
                 index = index % len(self.path_list1)
                 #index = np.random.randint(len(self.img_path1))
                 path = self.path_list1[index]

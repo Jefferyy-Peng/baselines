@@ -264,7 +264,7 @@ class SemanticSeg(object):
 
         scaler = GradScaler()
 
-        early_stopping = EarlyStopping(patience=10,verbose=True,monitor='val_score',op_type='max')
+        early_stopping = EarlyStopping(patience=20,verbose=True,monitor='val_score',op_type='max')
 
         epoch = self.start_epoch
         optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr = lr)

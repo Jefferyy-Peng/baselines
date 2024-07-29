@@ -658,10 +658,10 @@ if __name__ == '__main__':
 
     PHASE = 'seg'
 
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
+    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Focal_Unified_equal_rate_update_lr_0.0001_weight_decay_0.001')
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateUpdate'
+    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateModelUpdate'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
         plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:0', activation)
