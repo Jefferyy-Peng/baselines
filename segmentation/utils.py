@@ -2,6 +2,7 @@ import os
 import random
 from pathlib import Path
 from typing import Union
+import cv2
 
 import h5py
 import numpy as np
@@ -10,7 +11,90 @@ from matplotlib import pyplot as plt
 from picai_eval.eval import evaluate_case
 from report_guided_annotation import extract_lesion_candidates
 from skimage.metrics import hausdorff_distance
+import pydensecrf.densecrf as dcrf
 
+from pydensecrf.utils import compute_unary, create_pairwise_bilateral,\
+         create_pairwise_gaussian, softmax_to_unary, unary_from_softmax
+
+def erode_dilate(outputs, kernel_size=7):
+    kernel = np.ones((kernel_size,kernel_size),np.uint8)
+    outputs = outputs.astype(np.uint8)
+    for i in range(outputs.shape[0]):
+        img = outputs[i]
+        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
+        img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
+        outputs[i] = img
+    return outputs
+
+def get_crf_img(inputs, outputs):
+    for i in range(outputs.shape[0]):
+        img = inputs[i]
+        softmax_prob = outputs[i]
+        unary = unary_from_softmax(softmax_prob)
+        unary = np.ascontiguousarray(unary)
+        d = dcrf.DenseCRF(img.shape[0] * img.shape[1], 2)
+        d.setUnaryEnergy(unary)
+        feats = create_pairwise_gaussian(sdims=(10,10), shape=img.shape[:2])
+        d.addPairwiseEnergy(feats, compat=3, kernel=dcrf.DIAG_KERNEL,
+                            normalization=dcrf.NORMALIZE_SYMMETRIC)
+        feats = create_pairwise_bilateral(sdims=(50,50), schan=(20,20,20),
+                                          img=img, chdim=2)
+        d.addPairwiseEnergy(feats, compat=10, kernel=dcrf.DIAG_KERNEL,
+                            normalization=dcrf.NORMALIZE_SYMMETRIC)
+        Q = d.inference(5)
+        res = np.argmax(Q, axis=0).reshape((img.shape[0], img.shape[1]))
+        if i == 0:
+            crf = np.expand_dims(res,axis=0)
+        else:
+            res = np.expand_dims(res,axis=0)
+            crf = np.concatenate((crf,res),axis=0)
+    return crf
+
+def post_process(output_root, inputs, outputs, input_path=None,
+                 crf_flag=True, erode_dilate_flag=True,
+                 save=True, overlap=True):
+    inputs = (np.array(inputs.squeeze()).astype(np.float32)) * 255
+    inputs = np.expand_dims(inputs, axis=3)
+    inputs = np.concatenate((inputs,inputs,inputs), axis=3)
+    outputs = np.array(outputs)
+
+    # Conditional Random Field
+    if crf_flag:
+        outputs = get_crf_img(inputs, outputs)
+    else:
+        outputs = outputs.argmax(1)
+
+    # Erosion and Dilation
+    if erode_dilate_flag:
+        outputs = erode_dilate(outputs, kernel_size=7)
+    if save == False:
+        return outputs
+
+    outputs = outputs*255
+    for i in range(outputs.shape[0]):
+        path = input_path[i].split('/')
+        output_folder = os.path.join(output_root, path[-2])
+        try:
+            os.mkdir(output_folder)
+        except:
+            pass
+        output_path = os.path.join(output_folder, path[-1])
+        if overlap:
+            img = outputs[i]
+            img = np.expand_dims(img, axis=2)
+            zeros = np.zeros(img.shape)
+            img = np.concatenate((zeros,zeros,img), axis=2)
+            img = np.array(img).astype(np.float32)
+            img = inputs[i] + img
+            if img.max() > 0:
+                img = (img/img.max())*255
+            else:
+                img = (img/1) * 255
+            cv2.imwrite(output_path, img)
+        else:
+            img = outputs[i]
+            cv2.imwrite(output_path, img)
+    return None
 
 def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=None):
     """

@@ -37,7 +37,7 @@ from segmentation.segment_anything.modeling import TwoWayTransformer, MaskDecode
 from picai_eval import Metrics
 from picai_eval.eval import evaluate_case
 
-from segmentation.utils import compute_results_detect
+from segmentation.utils import compute_results_detect, post_process
 
 
 def set_seed(seed_value):
@@ -309,7 +309,7 @@ def search_ckpt_path(ckpt_path):
 
     return ckpt_file
 
-def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation):
+def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation, is_post_process):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
     lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
     # use zone_segdata_all for all data
@@ -376,10 +376,12 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation)
                     logits = torch.sigmoid(net(data))
                 else:
                     logits = net(data)
-                output = logits > 0.5
-                gland_output = output[:, 0]
-                zone_output = output[:, 1:3]
-                lesion_output = output[:, 3]
+            # if is_post_process:
+            # post_process('./', data.detach().cpu(), logits)
+            output = logits > 0.5
+            gland_output = output[:, 0]
+            zone_output = output[:, 1:3]
+            lesion_output = output[:, 3]
                 # if isinstance(output, tuple):
                 #     output = output[0]
             # multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
@@ -407,7 +409,7 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation)
     # os.system(f'touch result.txt')
     # os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
 
-def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode='normal',):
+def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, post_process, mode='normal',):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
 
     image_tsne = TSNE(n_components=2, random_state=42)
@@ -619,6 +621,7 @@ if __name__ == '__main__':
     mode = 'normal'
 
     activation = True
+    is_post_process = True
 
     # net = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
     #                                        in_channels=3, out_channels=4, init_features=32, pretrained=False)
@@ -664,6 +667,6 @@ if __name__ == '__main__':
     log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateModelUpdate'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
-        plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:0', activation)
+        plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:0', activation, is_post_process)
     else:
-        plot_eval_detect(net, val_AP, ckpt_path, log_dir, 'cuda:0', activation, mode)
+        plot_eval_detect(net, val_AP, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, mode)
