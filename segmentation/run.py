@@ -77,7 +77,7 @@ if __name__ == "__main__":
     path_list = PATH_LIST
     grid_search_params = {
         "weight_decay": [0.001, 0.01, 0.0001],
-        "lr": [1e-4, 1e-3, 1e-2],
+        "lr": [1e-3, 1e-4, 1e-2],
     }
 
     param_grid = ParameterGrid(grid_search_params)

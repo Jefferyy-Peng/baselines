@@ -5,7 +5,7 @@ import torch.nn.functional as F
 class FocalLoss(nn.Module):
     """Focal loss function for binary segmentation."""
 
-    def __init__(self, alpha=0.99, gamma=1, num_classes=2, activation=True, reduction="mean"):
+    def __init__(self, alpha=0.99, gamma=1, num_classes=2, activation=True, reduction="sum"):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma

@@ -52,7 +52,7 @@ def compute_results(logits, target, results):
     logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits
 
     for slices in logits:
-        preds.append(extract_lesion_candidates(slices, threshold=0.5)[0])
+        preds.append(extract_lesion_candidates(slices)[0])
     for y_det, y_true in zip(preds,
                              [target[i] for i in range(target.shape[0])]):
         y_list, *_ = evaluate_case(
@@ -141,13 +141,13 @@ class SemanticSeg(object):
         #     image_size=512
         # ).to(device))
 
-        self.net = DataParallel(UNet(
+        self.net = UNet(
             spatial_dims=3,
             in_channels=3,
             out_channels=1,
             strides=[(2, 2, 2), (1, 2, 2), (1, 2, 2), (1, 2, 2), (2, 2, 2)],
             channels=[32, 64, 128, 256, 512, 1024]
-        ), device_ids=[0, 1, 2, 3, 4, 5]).to(device)
+        ).to(device)
 
 
         if self.pre_trained:
@@ -247,8 +247,6 @@ class SemanticSeg(object):
         gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
         train_dataset = MultiLevel3DDataGenerator(train_path, 'random', num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
 
-        loss = Deep_Supervised_Loss(mode='Focal', activation=activation, weight=train_dataset.weight[1])
-
         # train_loader = DataLoaderFromDataset(train_dataset, batch_size=self.batch_size, num_threads=self.num_workers, infinite=True, shuffle=True)
         # with open('../../picai_baseline_orig/src/picai_baseline/unet/train_gen.pkl', 'rb') as file:
         #     train_loader = pickle.load(file)
@@ -257,7 +255,7 @@ class SemanticSeg(object):
         args.weights_dir = '../../picai_baseline_orig/workdir/results/UNet/weights/'
         args.overviews_dir = '../../picai_baseline_orig/workdir/results/UNet/overviews/Task2201_picai_baseline'
         args.batch_size = 8
-        args.num_threads = 12
+        args.num_threads = 1
         args.image_shape = [20, 256, 256]
         args.num_channels = 3
         args.num_classes = 2
@@ -268,6 +266,9 @@ class SemanticSeg(object):
             disable=False
         )
         train_loader.restart()
+
+        loss = Deep_Supervised_Loss(mode='Focal', activation=activation, weight=class_weights[-1])
+
 
         val_transformer = transforms.Compose([
             tio.Resize((24, 256, 256)),
@@ -287,7 +288,7 @@ class SemanticSeg(object):
         loss = loss.to(self.device)
 
         # optimizer setting
-        optimizer = torch.optim.Adam(net.parameters(),lr=lr,weight_decay=self.weight_decay)
+        optimizer = torch.optim.Adam(net.parameters(),lr=lr,amsgrad=True)
 
         scaler = GradScaler()
 
@@ -507,7 +508,7 @@ class SemanticSeg(object):
                 # gaussian blur to counteract checkerboard artifacts in
                 # predictions from the use of transposed conv. in the U-Net
                 preds = np.mean([
-                    np.stack([gaussian_filter(x[:, i, ...], sigma=1.5) for i in range(x.shape[1])], axis=1)
+                    gaussian_filter(x[:, 0, ...], sigma=1.5)
                     for x in preds
                 ], axis=0)
                 # with autocast(self.use_fp16):
@@ -517,7 +518,7 @@ class SemanticSeg(object):
                 # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1).float())
                 # loss = criterion(output, seg.float())
                 loss = 0
-                output = preds
+                output = np.expand_dims(preds, axis=1)
                 if plot:
                     for id, img in enumerate(data[0]):
                         for sliceid, slice in enumerate(img.permute(1, 2, 3, 0)):
