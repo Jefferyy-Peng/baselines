@@ -4,6 +4,7 @@ import os
 import pickle
 import shutil
 import warnings
+from collections import OrderedDict
 
 import numpy as np
 import torch
@@ -28,7 +29,7 @@ from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, MultiLevelDataGenerator)
 from loss import Deep_Supervised_Loss
 from model import itunet_2d
-from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN
+from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN, TwoStageMedSAM
 from segmentation.config import PATH_DIR
 from segmentation.segment_anything.modeling import MaskDecoder, TwoWayTransformer
 from utils import dfs_remove_weight, poly_lr, compute_results_detect, plot_segmentation2D
@@ -103,6 +104,15 @@ class SemanticSeg(object):
         # sam_model.image_encoder = get_peft_model(sam_model.image_encoder, lora_config)
 
         dense_model = ModelEmb()
+        seg_model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+                                  in_channels=3, out_channels=4 , init_features=32, pretrained=False)
+        checkpoint = torch.load('./new_ckpt/seg/UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001/fold1/epoch:28-gland_val_dice:0.94080-zone_val_dice:0.88053-lesion_val_dice:0.58659-lesion_val_ap:0.28383-lesion_val_auc:0.78891.pth')
+        state_dict =checkpoint['state_dict']
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k.replace('module.', '')  # remove `module.` prefix
+            new_state_dict[name] = v
+        seg_model.load_state_dict(new_state_dict)
         multi_mask_decoder = MaskDecoder(
             num_multimask_outputs=4,
             transformer=TwoWayTransformer(
@@ -115,11 +125,11 @@ class SemanticSeg(object):
             iou_head_depth=3,
             iou_head_hidden_dim=256,
         )
-        self.net = DataParallel(MedSAMAUTOMULTI(
+        self.net = DataParallel(TwoStageMedSAM(
                 image_encoder=sam_model.image_encoder,
                 mask_decoder=multi_mask_decoder,
                 prompt_encoder=sam_model.prompt_encoder,
-                dense_encoder=dense_model,
+                seg_model=seg_model,
                 image_size=512
             ), device_ids=[0, 1, 2, 3, 4, 5])
 
@@ -219,7 +229,7 @@ class SemanticSeg(object):
 
         net = self.net
         lr = self.lr
-        loss = Deep_Supervised_Loss(mode='Focal', activation=activation)
+        loss = Deep_Supervised_Loss(mode='FocalDice', activation=activation)
 
         if len(self.device.split(',')) > 1:
             net = DataParallel(net)
@@ -373,14 +383,14 @@ class SemanticSeg(object):
             zone_targets = []
             gland_targets = []
             for name, value in sample.items():
-                order_correct = True
-                if name == 'zone_seg_0':
-                    var_a_assigned = True
-                elif name == 'zone_seg_1':
-                    var_b_assigned = True
-                    if var_a_assigned:
-                        order_correct = True
-                    else: order_correct = False
+                # order_correct = True
+                # if name == 'zone_seg_0':
+                #     var_a_assigned = True
+                # elif name == 'zone_seg_1':
+                #     var_b_assigned = True
+                #     if var_a_assigned:
+                #         order_correct = True
+                #     else: order_correct = False
                 if name == 'ct':
                     data = value
                 elif 'lesion' in name:

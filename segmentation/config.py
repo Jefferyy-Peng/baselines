@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'MedSAMAuto_Focal_Unified_equal_rate_update'
+VERSION = 'TwoStageMedSAM_Focal_Unified_equal_rate_no_bbox'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -36,7 +36,7 @@ print(WEIGHT_PATH)
 INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
-  'batch_size':70,
+  'batch_size':40,
   'num_workers':12,
   'device':'cuda',
   'pre_trained':PRE_TRAINED,
