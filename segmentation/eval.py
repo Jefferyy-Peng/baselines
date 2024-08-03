@@ -24,7 +24,6 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import cv2
-from report_guided_annotation import extract_lesion_candidates
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, MultiLevelDataGenerator)
@@ -38,6 +37,7 @@ from picai_eval import Metrics
 from picai_eval.eval import evaluate_case
 
 from segmentation.utils import compute_results_detect, post_process
+from segmentation.eval_utils import erode_dilate
 
 
 def set_seed(seed_value):
@@ -376,12 +376,16 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation,
                     logits = torch.sigmoid(net(data))
                 else:
                     logits = net(data)
-            # if is_post_process:
             # post_process('./', data.detach().cpu(), logits)
             output = logits > 0.5
+            if is_post_process:
+                output = torch.from_numpy(erode_dilate(output.squeeze(0).detach().cpu().numpy())).unsqueeze(0).to(device)
             gland_output = output[:, 0]
             zone_output = output[:, 1:3]
             lesion_output = output[:, 3]
+            intersect = (gland_output & lesion_output).sum().item()
+            lesion_size = lesion_output.sum().item()
+            ratio = intersect / lesion_size
                 # if isinstance(output, tuple):
                 #     output = output[0]
             # multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
@@ -489,6 +493,8 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, post
             output = output.detach().cpu()
             lesion_output = output[:, -1, :, :].unsqueeze(1)
             lesion_output = torch.from_numpy(np.array([revert_transform(slice) for slice in lesion_output])).squeeze(1)
+            gland_output = output[:, 0, :, :].unsqueeze(1)
+            gland_output = torch.from_numpy(np.array([revert_transform(slice) for slice in gland_output])).squeeze(1)
             target = target.detach().cpu()
             target = target[0].unsqueeze(1)
             target = torch.from_numpy(np.array([seg_transform(slice) for slice in target])).squeeze(1)
@@ -497,7 +503,7 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, post
             #     plot_segmentation2D()
 
 
-            lesion_results = compute_results_detect(lesion_output.numpy(), target.numpy(),
+            lesion_results = compute_results_detect(lesion_output.numpy(), target.numpy(), gland_output.numpy(),
                                                     lesion_results)
             # if step > 2:
             #     break
@@ -610,13 +616,13 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, post
 
 
 if __name__ == '__main__':
-    PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
-    PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
-    train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
+    # PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
+    # PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
+    # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
 
-    # PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
-    # AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
-    # train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
+    PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
+    AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
+    train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
 
     mode = 'normal'
 
@@ -659,12 +665,12 @@ if __name__ == '__main__':
     #     image_size=512
     # )
 
-    PHASE = 'seg'
+    PHASE = 'detect'
 
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Focal_Unified_equal_rate_update_lr_0.0001_weight_decay_0.001')
+    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateModelUpdate'
+    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateErodeDilate'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
         plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:0', activation, is_post_process)

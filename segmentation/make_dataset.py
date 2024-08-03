@@ -38,6 +38,8 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
     for i in range(labels.shape[0]):
         ct = cts[:,i,:,:]
         lab = labels[i,:,:]
+        if lab.max() == 0:
+            continue
         # if 2 not in np.unique(lab) or 1 not in np.unique(lab):
         #     continue
         # else:
@@ -194,7 +196,7 @@ if __name__ == "__main__":
     phase = 'seg'
     base_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
     label_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
-    output_dir = './dataset/gland_segdata'
+    output_dir = './dataset/gland_segdata_partial'
     test_dir = 'path/to/nnUNet_test_data'
     seg_dir = 'path/to/segmentation_result'
     csv_path = 'path/to/classification_result'

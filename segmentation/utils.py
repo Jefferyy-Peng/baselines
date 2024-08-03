@@ -9,22 +9,14 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from picai_eval.eval import evaluate_case
-from report_guided_annotation import extract_lesion_candidates
 from skimage.metrics import hausdorff_distance
 import pydensecrf.densecrf as dcrf
 
 from pydensecrf.utils import compute_unary, create_pairwise_bilateral,\
          create_pairwise_gaussian, softmax_to_unary, unary_from_softmax
 
-def erode_dilate(outputs, kernel_size=7):
-    kernel = np.ones((kernel_size,kernel_size),np.uint8)
-    outputs = outputs.astype(np.uint8)
-    for i in range(outputs.shape[0]):
-        img = outputs[i]
-        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
-        img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
-        outputs[i] = img
-    return outputs
+from segmentation.eval_utils import extract_lesion_candidates
+
 
 def get_crf_img(inputs, outputs):
     for i in range(outputs.shape[0]):
@@ -140,10 +132,10 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     plt.savefig(os.path.join(save_path, f'slice_{count}'))
     plt.close()
 
-def compute_results_detect(logits, target, results):
+def compute_results_detect(logits, target, gland_output, results):
     preds = []
     logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits
-    preds.append(extract_lesion_candidates(logits, threshold=0.5)[0])
+    preds.append(extract_lesion_candidates(logits, gland_output, threshold=0.5)[0])
     for y_det, y_true in zip(preds,
                              [target]):
         y_list, *_ = evaluate_case(

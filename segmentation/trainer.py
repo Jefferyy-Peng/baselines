@@ -219,7 +219,7 @@ class SemanticSeg(object):
 
         net = self.net
         lr = self.lr
-        loss = Deep_Supervised_Loss(mode='Focal', activation=activation)
+        loss = Deep_Supervised_Loss(mode='FocalDice', activation=activation)
 
         if len(self.device.split(',')) > 1:
             net = DataParallel(net)
@@ -230,7 +230,7 @@ class SemanticSeg(object):
 
         lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
         zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
-        gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
+        gland_pid = pickle.load(open('./dataset/gland_segdata_partial/gland_pid.p', 'rb'))
         train_dataset = MultiLevelDataGenerator(train_path, 'train', num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
 
         train_loader = DataLoader(
