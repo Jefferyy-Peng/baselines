@@ -1,0 +1,12 @@
+numpy
+pydicom
+scikit-image==0.20.0
+scikit-learn
+scipy
+SimpleITK
+tqdm
+torch
+torchvision
+tensorboardX
+picai_eval==1.4.4
+einops
