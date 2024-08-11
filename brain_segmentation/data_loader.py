@@ -246,6 +246,48 @@ class To_Tensor(object):
 
         return new_sample
 
+class DataGenerator3D(Dataset):
+    '''
+    Custom Dataset class for data loader.
+    Args：
+    - path_list: list of file path
+    - roi_number: integer or None, to extract the corresponding label
+    - num_class: the number of classes of the label
+    - transform: the data augmentation methods
+    '''
+
+    def __init__(self, path_list, num_class=2, transform=None, mode='train'):
+        self.path_list = path_list
+        self.num_class = num_class
+        self.transform = transform
+        self.mode = mode
+
+    def __len__(self):
+        return len(self.path_list)
+
+    def __getitem__(self, index):
+        PSIR = torch.Tensor(hdf5_reader(self.path_list[index], 'PSIR'))
+        T1W = torch.Tensor(hdf5_reader(self.path_list[index], 'T1W'))
+        T2W = torch.Tensor(hdf5_reader(self.path_list[index], 'T2W'))
+        R2 = torch.Tensor(hdf5_reader(self.path_list[index], 'R2'))
+        seg = torch.Tensor(hdf5_reader(self.path_list[index], 'seg')).permute(0, 2, 1)
+        transform = transforms.Resize(size=(1024, 1024))
+        ct = torch.stack([PSIR, T1W, T2W, R2])
+        ct = transform(ct).numpy()
+        seg_transform = transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)
+        seg = seg_transform(seg).numpy()
+
+        sample = {'ct': ct, 'seg': seg}
+        # Transform
+        if self.transform is not None:
+            sample = self.transform(sample)
+
+        # sample['seg'] = create_binary_masks(sample['seg'])
+        if self.mode == 'train':
+            return sample
+        elif self.mode == 'val':
+            return sample, self.path_list[index]
+
 
 class DataGenerator(Dataset):
     '''

@@ -205,7 +205,7 @@ def convert_dicom_to_hdf5_3d(subject_path, output_file):
         for root, dirs, files in os.walk(subject_path):
             if len(files) == 0:
                 continue
-            if files[0].endswith('.dcm') and ('T1W_AX' in root or 'T1W_SAG' in root or 'T2W_STIR_AX' in root or 'T2W_STIR_SAG' in root or 'T2W_FLAIR_AX' in root or 'T2W_FLAIR_SAG' in root or 'PDW_AX' in root or 'PDW_SAG' in root or 'PSIR_AX' in root or 'PSIR_SAG' in root or 'DIR_WMsupp_AX' in root or 'DIR_WMsupp_SAG' in root):
+            if files[0].endswith('.dcm') and ('T1W_AX' in root or 'T1W_SAG' in root or 'T2W_STIR' in root or 'T2W_FLAIR' in root or 'PDW' in root or 'PSIR' in root or 'R2_MAP' in root):
 
                 def extract_number(file_name):
                     match = re.search(r'\d+', file_name)

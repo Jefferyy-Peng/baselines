@@ -22,7 +22,7 @@ things to change:
 def get_cross_validation_by_sample(path_list, fold_num, current_fold):
 
     sample_list = list(set([os.path.basename(case).replace('_' + os.path.basename(case).split('_')[-1], '') for case in path_list]))
-    # sample_list.sort()
+    sample_list.sort()
     print('number of sample:',len(sample_list))
     _len_ = len(sample_list) // fold_num
 
@@ -52,6 +52,38 @@ def get_cross_validation_by_sample(path_list, fold_num, current_fold):
           "Val set length", len(validation_path))
     return train_path, validation_path
 
+def get_cross_validation_by_3D_sample(path_list, fold_num, current_fold):
+
+    sample_list = list(set([os.path.basename(case).replace('.' + os.path.basename(case).split('.')[-1], '') for case in path_list]))
+    sample_list.sort()
+    print('number of sample:',len(sample_list))
+    _len_ = len(sample_list) // fold_num
+
+    train_id = []
+    validation_id = []
+    end_index = current_fold * _len_
+    start_index = end_index - _len_
+    if current_fold == fold_num:
+        validation_id.extend(sample_list[start_index:])
+        train_id.extend(sample_list[:start_index])
+    else:
+        validation_id.extend(sample_list[start_index:end_index])
+        train_id.extend(sample_list[:start_index])
+        train_id.extend(sample_list[end_index:])
+
+    train_path = []
+    validation_path = []
+    for case in path_list:
+        if os.path.basename(case).replace('_' + os.path.basename(case).split('_')[-1], '') in train_id:
+            train_path.append(case)
+        else:
+            validation_path.append(case)
+
+    random.shuffle(train_path)
+    random.shuffle(validation_path)
+    print("Train set length ", len(train_path),
+          "Val set length", len(validation_path))
+    return train_path, validation_path
 
 def get_parameter_number(net):
     total_num = sum(p.numel() for p in net.parameters())

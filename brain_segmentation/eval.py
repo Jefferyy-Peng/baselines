@@ -28,13 +28,14 @@ from tqdm import tqdm
 import cv2
 from report_guided_annotation import extract_lesion_candidates
 
+from brain_segmentation.utils import dice_score_per_class, dice_score_per_class_3d
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
-                         RandomRotate2D, To_Tensor)
+                         RandomRotate2D, To_Tensor, DataGenerator3D)
 from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from segmentation.config import FOLD_NUM, CURRENT_FOLD
 from segmentation.model_single import ModelEmb, SegDecoderCNN
 from segmentation.segment_anything import sam_model_registry
-from brain_segmentation.run import get_cross_validation_by_sample
+from brain_segmentation.run import get_cross_validation_by_sample, get_cross_validation_by_3D_sample
 from segmentation.segment_anything.modeling import TwoWayTransformer, MaskDecoder
 from picai_eval import Metrics
 from picai_eval.eval import evaluate_case
@@ -257,11 +258,9 @@ def compute_dice(predict, target):
     Return:
         mean dice over the batch
     """
-    assert predict.shape == target.shape, 'predict & target shape do not match'
-
-    dice = (2 * (predict * target).sum() + 1) / (predict.sum() + target.sum() + 1)
-
-    return dice
+    target = target.long().detach().cpu()
+    scores = dice_score_per_class_3d(predict.detach().cpu(), target, num_classes=4)
+    return scores
 
 def add_contour(original_image, mask_lesion, mask_pz, mask_cz, mask_gland, random_color=False, contour_thickness=7,):
     color1 = np.array([240, 128, 128, 0.9])  # Red
@@ -484,9 +483,6 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
 
     state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
 
-    revert_transform = Resize((256, 256), mode='bilinear')
-    seg_transform = Resize((256, 256), mode='nearest')
-
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
         name = k.replace('module.', '')  # remove `module.` prefix
@@ -514,7 +510,7 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
     val_transformer = transforms.Compose(
         [Normalize_2d(), To_Tensor()])
 
-    val_dataset = DataGenerator(val_path, transform=val_transformer)
+    val_dataset = DataGenerator3D(val_path, transform=val_transformer)
 
     val_loader = DataLoader(
         val_dataset,
@@ -525,11 +521,11 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
     )
     count = 0
 
-    dice_dict = {}
     lesion_results = []
     image_embeddings = []
     dense_embeddings = []
     image_targets = []
+    dices = []
     with torch.no_grad():
         for step, sample in enumerate(tqdm(val_loader)):
             data = sample['ct']
@@ -554,18 +550,18 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
             if activation:
                 output = torch.sigmoid(output)  # N*H*W
             output = output.detach().cpu()
-            lesion_output = output[:, -1, :, :].unsqueeze(1)
-            lesion_output = torch.from_numpy(np.array([revert_transform(slice) for slice in lesion_output])).squeeze(1)
+            # lesion_output = torch.from_numpy(np.array([revert_transform(slice) for slice in lesion_output])).squeeze(1)
             target = target.detach().cpu()
-            target = target[0].unsqueeze(1)
-            target = torch.from_numpy(np.array([seg_transform(slice) for slice in target])).squeeze(1)
+            target = target[0]
+            # target = torch.from_numpy(np.array([seg_transform(slice) for slice in target])).squeeze(1)
             # if plot:
             #     for
             #     plot_segmentation2D()
+            dices.append(compute_dice(torch.softmax(output, dim=1).detach(), target))
 
 
-            lesion_results = compute_results_detect(lesion_output.numpy(), target.numpy(),
-                                                    lesion_results)
+            # lesion_results = compute_results_detect(lesion_output.numpy(), target.numpy(),
+            #                                         lesion_results)
             # if step > 2:
             #     break
 
@@ -598,92 +594,25 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
         plt.tight_layout()
         plt.savefig(os.path.join(log_dir, f'{mode}.png'))
 
-    lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
-    FP_patient_level = 0
-    TP_patient_level = 0
-    FN_patient_level = 0
-    TN_patient_level = 0
-    lesion_results_list = []
-    for idx, lesion_result in lesion_results.items():
-        this_FP_patient_level = 0
-        this_TP_patient_level = 0
-        this_FN_patient_level = 0
-        this_TN_patient_level = 0
-        if len(lesion_result) == 0:
-            this_TN_patient_level = 1
-        for this_lesion_result in lesion_result:
-            if this_lesion_result[0] == 0 and this_lesion_result[2] == 0:
-                this_FP_patient_level = 1
-                this_TP_patient_level = 0
-                this_FN_patient_level = 0
-                this_TN_patient_level = 0
-                break
-            elif this_lesion_result[0] == 1 and this_lesion_result[2] != 0:
-                this_TP_patient_level = 1
-            elif this_lesion_result[0] == 1 and this_lesion_result[2] == 0:
-                this_FN_patient_level = 1
-            else:
-                raise NotImplementedError
-        for this_lesion_result in lesion_result:
-            lesion_results_list.append(this_lesion_result)
-        if this_TP_patient_level == 1 and this_FN_patient_level == 1:
-            print('TP and FN coexist')
-        FP_patient_level += this_FP_patient_level
-        TP_patient_level += this_TP_patient_level
-        FN_patient_level += this_FN_patient_level
-        TN_patient_level += this_TN_patient_level
-    FP_lesion_level = 0
-    TP_lesion_level = 0
-    FN_lesion_level = 0
-    TN_lesion_level = 0
-    for lesion_result_tuple in lesion_results_list:
-        if lesion_result_tuple[0] == 0 and lesion_result_tuple[2] == 0:
-            FP_lesion_level += 1
-        elif lesion_result_tuple[0] == 1 and lesion_result_tuple[2] != 0:
-            TP_lesion_level += 1
-        elif lesion_result_tuple[0] == 1 and lesion_result_tuple[2] == 0:
-            FN_lesion_level += 1
-        else:
-            raise NotImplementedError
-    conf_matrix_lesion_level = np.array([[TN_lesion_level, FP_lesion_level], [FN_lesion_level, TP_lesion_level]])
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(conf_matrix_lesion_level, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted 0', 'Predicted 1'],
-                yticklabels=['Actual 0', 'Actual 1'])
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.title('Lesion Level Confusion Matrix')
-    plt.savefig(os.path.join(log_dir, 'Lesion Level Confusion Matrix.png'))
-
-    conf_matrix_patient_level = np.array([[TN_patient_level, FP_patient_level], [FN_patient_level, TP_patient_level]])
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(conf_matrix_patient_level, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted 0', 'Predicted 1'],
-                yticklabels=['Actual 0', 'Actual 1'])
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.title('Patient Level Confusion Matrix')
-    plt.savefig(os.path.join(log_dir, 'Patient Level Confusion Matrix.png'))
-
-    valid_metrics = Metrics(lesion_results)
-    auc = valid_metrics.auroc
-    ap = valid_metrics.AP
-    score = valid_metrics.score
-    print(f'auc: {auc}, ap:{ap}, score: {score}')
+    dices = torch.stack(dices)
+    mean_dice = torch.mean(dices, dim=0)
+    print(f'caudate dice: {mean_dice[1]}, globus dice: {mean_dice[2]}, putamen dice: {mean_dice[3]}')
     os.system(f'cd {log_dir}')
     os.system(f'touch result.txt')
-    os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
+    os.system(f'echo "caudate dice: {mean_dice[1]}, globus dice: {mean_dice[2]}, putamen dice: {mean_dice[3]}" >> result.txt')
 
 
 
 
 
 if __name__ == '__main__':
-    PATH_DIR = './dataset/ucsd_multi_contrast_segdata/data_2d'
-    PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.h5'))
-    train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
+    # PATH_DIR = './dataset/ucsd_multi_contrast_segdata/data_2d'
+    # PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.h5'))
+    # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
 
-    # PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
-    # AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
-    # train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
+    PATH_AP = './dataset/ucsd_multi_contrast_segdata/data_3d'
+    AP_LIST = glob.glob(os.path.join(PATH_AP, '*.h5'))
+    train_AP, val_AP = get_cross_validation_by_3D_sample(AP_LIST, FOLD_NUM, 1)
 
     mode = 'normal'
 
@@ -724,7 +653,7 @@ if __name__ == '__main__':
     #     image_size=512
     # )
 
-    PHASE = 'seg'
+    PHASE = 'detect'
 
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
     ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_ucsd_weighted_focal_lr_0.0001_weight_decay_0.001')

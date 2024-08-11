@@ -51,6 +51,32 @@ def dice_score_per_class(preds, targets, num_classes, smooth=1.0):
 
     return dice_scores
 
+def dice_score_per_class_3d(preds, targets, num_classes, smooth=1.0):
+    """
+    Compute the Dice score for each class.
+
+    :param preds: Predicted logits of shape (N, C, H, W).
+    :param targets: Ground truth labels of shape (N, H, W).
+    :param num_classes: Number of classes.
+    :param smooth: Smoothing factor to avoid division by zero.
+    :return: Tensor of Dice scores for each class.
+    """
+    # Convert predictions to class indices
+    preds = torch.argmax(preds, dim=1)
+
+    # One-hot encode the predictions and targets
+    preds_one_hot = one_hot_encode(preds, num_classes)
+    targets_one_hot = one_hot_encode(targets, num_classes)
+
+    # Compute the intersection and union for each class
+    intersection = (preds_one_hot * targets_one_hot).sum(dim=(0, 2, 3))
+    union = preds_one_hot.sum(dim=(0, 2, 3)) + targets_one_hot.sum(dim=(0, 2, 3))
+
+    # Compute the Dice score for each class
+    dice_scores = (2.0 * intersection + smooth) / (union + smooth)
+
+    return dice_scores
+
 def transform_mask_to_single_channel(mask_3d):
     # Create the single-channel mask by combining the three channels
     mask_1d = mask_3d[0, ...] * 1 + mask_3d[1, ...] * 2 + mask_3d[2, ...] * 3
