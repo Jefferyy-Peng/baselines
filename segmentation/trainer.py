@@ -29,8 +29,8 @@ from data_loader import (DataGenerator, Normalize, RandomFlip2D,
 from loss import Deep_Supervised_Loss
 from model import itunet_2d
 from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN
-from segmentation.config import PATH_DIR
-from segmentation.segment_anything.modeling import MaskDecoder, TwoWayTransformer
+from config import PATH_DIR
+from segment_anything.modeling import MaskDecoder, TwoWayTransformer
 from utils import dfs_remove_weight, poly_lr, compute_results_detect, plot_segmentation2D
 from monai.networks.nets import SwinUNETR
 import torchio as tio
@@ -121,7 +121,7 @@ class SemanticSeg(object):
                 prompt_encoder=sam_model.prompt_encoder,
                 dense_encoder=dense_model,
                 image_size=512
-            ), device_ids=[0, 1, 2, 3, 4, 5])
+            ), device_ids=[0, 1, 2, 3, 4, 5,6,7])
 
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
         #

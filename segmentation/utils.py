@@ -15,7 +15,7 @@ import pydensecrf.densecrf as dcrf
 from pydensecrf.utils import compute_unary, create_pairwise_bilateral,\
          create_pairwise_gaussian, softmax_to_unary, unary_from_softmax
 
-from segmentation.eval_utils import extract_lesion_candidates
+from eval_utils import extract_lesion_candidates
 
 
 def get_crf_img(inputs, outputs):

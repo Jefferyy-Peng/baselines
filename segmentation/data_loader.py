@@ -6,7 +6,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from segmentation.config import PATH_DIR
+from config import PATH_DIR
 from utils import hdf5_reader
 
 
