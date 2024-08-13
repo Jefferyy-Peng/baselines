@@ -115,7 +115,7 @@ class MedSAMAUTOMULTI(nn.Module):
             image_pe=self.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
             sparse_prompt_embeddings=sparse_embeddings_none,  # (B, 2, 256)
             dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
-            multimask_output=True,
+            multimask_output=False,
         )
         # print(image_embedding.shape, dense_embeddings.shape, low_res_masks.shape)
 

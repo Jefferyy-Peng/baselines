@@ -104,6 +104,8 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     # Iterate over each slice
     fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 8))
 
+    img2D = np.repeat(np.expand_dims(img2D[..., 0], axis=-1), 3, axis=-1)
+
         # Plot image slice
     ax = axes[0]
     ax.imshow(img2D, cmap='gray')

@@ -5,10 +5,12 @@ from collections import OrderedDict
 import SimpleITK as sitk
 import pandas as pd
 import torch
+from torchvision import transforms
 from tqdm import tqdm
 import numpy as np
 import h5py
 import random
+
 
 
 def save_as_hdf5(data, save_path, key):
@@ -51,12 +53,12 @@ def crop_with_margin(image, seg, mask, margin):
 
     # Add the margin
     min_row = max(min_row - margin, 0)
-    max_row = min(max_row + margin, image.shape[0] - 1)
+    max_row = min(max_row + margin, image.shape[1] - 1)
     min_col = max(min_col - margin, 0)
-    max_col = min(max_col + margin, image.shape[1] - 1)
+    max_col = min(max_col + margin, image.shape[2] - 1)
 
     # Crop the image
-    cropped_image = image[min_row:max_row + 1, min_col:max_col + 1]
+    cropped_image = image[:, min_row:max_row + 1, min_col:max_col + 1]
     cropped_seg = seg[min_row:max_row + 1, min_col:max_col + 1]
 
     return cropped_image, cropped_seg
@@ -80,15 +82,34 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
         hdf5_file.create_dataset('seg', data=lab.astype(np.uint8))
         hdf5_file.close()
 
+class Normalize(object):
+    def __call__(self, data):
+        data = data.float()
+        for i in range(data.shape[0]):
+            if torch.max(data[i]) != 0:
+                data[i] = data[i] / torch.max(data[i])
+
+        data[data < 0] = 0
+        return data.unsqueeze(0)
+
+class To_Tensor(object):
+    '''
+    Convert the data in sample to torch Tensor.
+    Args:
+    - n_class: the number of class
+    '''
+
+    def __call__(self, data):
+        return torch.from_numpy(data)
 
 def make_segdata(base_dir, label_dir, output_dir):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    data_dir_2d = os.path.join(output_dir, 'data_2d_crop')
+    data_dir_2d = os.path.join(output_dir, 'data_2d')
     if not os.path.exists(data_dir_2d):
         os.makedirs(data_dir_2d)
-    data_dir_3d = os.path.join(output_dir, 'data_3d_crop')
+    data_dir_3d = os.path.join(output_dir, 'data_3d')
     if not os.path.exists(data_dir_3d):
         os.makedirs(data_dir_3d)
 
@@ -100,8 +121,8 @@ def make_segdata(base_dir, label_dir, output_dir):
     pid_dict = {}
     unet = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
                                   in_channels=3, out_channels=4 , init_features=32, pretrained=False)
-    ckpt_path = './new_ckpt/seg/UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001/epoch:28-gland_val_dice:0.94080-zone_val_dice:0.88053-lesion_val_dice:0.58659-lesion_val_ap:0.28383-lesion_val_auc:0.78891.pth'
-    state_dict = torch.load(ckpt_path, map_location='cuda')['state_dict']
+    ckpt_path = './new_ckpt/seg/UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001/fold1/epoch:28-gland_val_dice:0.94080-zone_val_dice:0.88053-lesion_val_dice:0.58659-lesion_val_ap:0.28383-lesion_val_auc:0.78891.pth'
+    state_dict = torch.load(ckpt_path, map_location='cuda:1')['state_dict']
 
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
@@ -110,7 +131,7 @@ def make_segdata(base_dir, label_dir, output_dir):
 
     unet.load_state_dict(new_state_dict)
     unet.eval()
-    unet = unet.to('cuda')
+    unet = unet.to('cuda:1')
 
     for id, path in enumerate(tqdm(pathlist)):
         seg = sitk.ReadImage(os.path.join(label_dir, path + '.nii.gz'))
@@ -132,25 +153,40 @@ def make_segdata(base_dir, label_dir, output_dir):
         in_2 = sitk.GetArrayFromImage(in_2).astype(np.int16)
         in_3 = sitk.GetArrayFromImage(in_3).astype(np.int16)
         img = np.stack((in_1, in_2, in_3), axis=0)
-        img_tensor = torch.from_numpy(img).to('cuda').unsqueeze(0)
-        output = unet(img_tensor)
-        pred = output > 0.5
-        pred_gland = pred[0, 0].detach().cpu().numpy()
-        if pred_gland.max() == 0:
-            count += 1
-            continue
-        else:
-            cropped_img, cropped_seg = crop_with_margin(img, seg, pred_gland, 5)
-
-
-        hdf5_path = os.path.join(data_dir_3d, str(count) + '.hdf5')
-
-        save_as_hdf5(cropped_img, hdf5_path, 'ct')
-        save_as_hdf5(cropped_seg, hdf5_path, 'seg')
+        transform = transforms.Compose([
+            To_Tensor(),
+            Normalize(),
+            transforms.Resize(size=(1024, 1024)),
+        ])
+        seg_transform = transforms.Compose([
+            To_Tensor(),
+            transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST),
+        ])
+        # seg_image = torch.Tensor(seg_image)
+        slice_segs = []
+        for slice_seg in seg_image:
+            slice_segs.append(seg_transform(np.expand_dims(np.expand_dims(slice_seg, axis=0),axis=0)))
+        seg = torch.concatenate(slice_segs).squeeze(1)
+        # img_tensor = torch.from_numpy(img).float().to('cuda:1')
+        slice_imgs = []
+        for slice_img in img.transpose(1, 0, 2, 3):
+            slice_imgs.append(transform(slice_img).to('cuda:1'))
+        pred_slices = []
+        for id, slice in enumerate(slice_imgs):
+            output = unet(slice)
+            pred = output > 0.5
+            pred_gland = pred[0, 0]
+            if pred_gland.max() == 0:
+                continue
+            else:
+                cropped_img, cropped_seg = crop_with_margin(slice_imgs[id].squeeze(0).detach().cpu().numpy(), slice_segs[id].squeeze(0).squeeze(0).numpy(), pred_gland.detach().cpu().numpy(), 5)
+                hdf5_file = h5py.File(os.path.join(data_dir_2d, '%s_%d.hdf5' % (count, id)), 'w')
+                hdf5_file.create_dataset('ct', data=cropped_img.astype(np.float32))
+                hdf5_file.create_dataset('seg', data=cropped_seg.astype(np.uint8))
+                hdf5_file.close()
 
         # count -> path for lesion, path -> count for gland and zone
         pid_dict[path] = count
-        store_images_labels_2d(data_dir_2d, count, cropped_img, cropped_seg)
 
         count += 1
 
@@ -240,9 +276,9 @@ def make_semidata(base_dir, label_dir, output_dir, test_dir, seg_dir, csv_path):
 
 if __name__ == "__main__":
     phase = 'seg'
-    base_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
-    label_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
-    output_dir = './dataset/gland_segdata_partial'
+    base_dir = '../output_lesion_human/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
+    label_dir = '../output_lesion_human/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
+    output_dir = './dataset/lesion_segdata_human_crop'
     test_dir = 'path/to/nnUNet_test_data'
     seg_dir = 'path/to/segmentation_result'
     csv_path = 'path/to/classification_result'
