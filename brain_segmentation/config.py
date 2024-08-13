@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'UNet3d_ucsd_weighted_focal'
+VERSION = 'UNet3d_ucsd_1000x_weighted_focal_slow_lr_decay'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3

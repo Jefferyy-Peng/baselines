@@ -129,7 +129,7 @@ class DiceLoss(nn.Module):
 class Deep_Supervised_Loss(nn.Module):
     def __init__(self, mode='FocalDice', activation=True):
         super(Deep_Supervised_Loss, self).__init__()
-        self.fl = FocalLoss(gamma=2, alpha=torch.Tensor([0.01, 1, 1, 1]), reduction='sum')
+        self.fl = FocalLoss(gamma=2, alpha=torch.Tensor([0.001, 1, 1, 1]), reduction='sum')
         self.dl = DiceLoss(activation=activation)
         self.mode = mode
     def forward(self, input, target):

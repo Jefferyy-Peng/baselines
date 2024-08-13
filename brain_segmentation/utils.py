@@ -314,7 +314,7 @@ def dfs_remove_weight(ckpt_path,retain=5):
             remove_weight_path(ckpt_path,retain=retain)
             break  
 
-def poly_lr(epoch, max_epochs,ck_epoch = 0, initial_lr = 1e-2, exponent=0.9):
+def poly_lr(epoch, max_epochs,ck_epoch = 0, initial_lr = 1e-2, exponent=0.6):
     return initial_lr * (1 - (epoch - ck_epoch) / (max_epochs - ck_epoch))**exponent
 
 
