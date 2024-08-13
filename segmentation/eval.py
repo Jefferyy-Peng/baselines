@@ -28,7 +28,7 @@ import cv2
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, MultiLevelDataGenerator)
 from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN
-from segmentation.config import FOLD_NUM, CURRENT_FOLD
+from segmentation.config import FOLD_NUM, CURRENT_FOLD, PATH_DIR
 from segmentation.model_single import ModelEmb, SegDecoderCNN
 from segmentation.segment_anything import sam_model_registry
 from segmentation.run import get_cross_validation_by_sample
