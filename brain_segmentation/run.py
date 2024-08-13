@@ -21,8 +21,9 @@ things to change:
 
 def get_cross_validation_by_sample(path_list, fold_num, current_fold):
 
-    sample_list = list(set([os.path.basename(case).replace('_' + os.path.basename(case).split('_')[-1], '') for case in path_list]))
-    sample_list.sort()
+    # sample_list = list(set([os.path.basename(case).replace('_' + os.path.basename(case).split('_')[-1], '') for case in path_list]))
+    # sample_list.sort()
+    sample_list = ['HD_1_DL', 'control_3', 'TBI_2_DL', 'HD_4_DL', 'TBI_1_DL', 'control_2', 'TBI_7_DL', 'HD_3_DL', 'control_1', 'HD_2_DL']
     print('number of sample:',len(sample_list))
     _len_ = len(sample_list) // fold_num
 
@@ -54,8 +55,10 @@ def get_cross_validation_by_sample(path_list, fold_num, current_fold):
 
 def get_cross_validation_by_3D_sample(path_list, fold_num, current_fold):
 
-    sample_list = list(set([os.path.basename(case).replace('.' + os.path.basename(case).split('.')[-1], '') for case in path_list]))
-    sample_list.sort()
+    # sample_list = list(set([os.path.basename(case).replace('.' + os.path.basename(case).split('.')[-1], '') for case in path_list]))
+    # sample_list.sort()
+    sample_list = ['HD_1_DL', 'control_3', 'TBI_2_DL', 'HD_4_DL', 'TBI_1_DL', 'control_2', 'TBI_7_DL', 'HD_3_DL', 'control_1', 'HD_2_DL']
+
     print('number of sample:',len(sample_list))
     _len_ = len(sample_list) // fold_num
 
@@ -74,7 +77,7 @@ def get_cross_validation_by_3D_sample(path_list, fold_num, current_fold):
     train_path = []
     validation_path = []
     for case in path_list:
-        if os.path.basename(case).replace('_' + os.path.basename(case).split('_')[-1], '') in train_id:
+        if os.path.basename(case).replace('.' + os.path.basename(case).split('.')[-1], '') in train_id:
             train_path.append(case)
         else:
             validation_path.append(case)
@@ -136,14 +139,21 @@ if __name__ == "__main__":
                 print("=== Training Fold ", current_fold, " ===")
                 segnetwork = SemanticSeg(**GRID_INIT_TRAINER)
                 print(get_parameter_number(segnetwork.net))
-                train_path, val_path = get_cross_validation_by_sample(path_list, FOLD_NUM, current_fold)
-                train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, current_fold)
+                if INIT_TRAINER['mode'] == '2d':
+                    train_path, val_path = get_cross_validation_by_sample(path_list, FOLD_NUM, current_fold)
+                    train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, current_fold)
+                elif INIT_TRAINER['mode'] == '3d':
+                    train_path, val_path = get_cross_validation_by_3D_sample(path_list, FOLD_NUM, current_fold)
+                    train_AP, val_AP = get_cross_validation_by_3D_sample(AP_LIST, FOLD_NUM, current_fold)
                 GRID_SETUP_TRAINER['train_path'] = train_path
                 GRID_SETUP_TRAINER['val_path'] = val_path
                 GRID_SETUP_TRAINER['val_ap'] = val_AP
                 GRID_SETUP_TRAINER['cur_fold'] = current_fold
                 start_time = time.time()
-                segnetwork.trainer(**GRID_SETUP_TRAINER)
+                if INIT_TRAINER['mode'] == '2d':
+                    segnetwork.trainer(**GRID_SETUP_TRAINER)
+                elif INIT_TRAINER['mode'] == '3d':
+                    segnetwork.trainer_3d(**GRID_SETUP_TRAINER)
 
                 print('run time:%.4f' % (time.time() - start_time))
 

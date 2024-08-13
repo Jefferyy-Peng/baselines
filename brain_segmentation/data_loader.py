@@ -1,5 +1,6 @@
 import random
 
+import monai
 import numpy as np
 import torch
 from PIL import Image
@@ -115,6 +116,8 @@ class RandomRotate3D(object):
 
         for name, data in sample.items():
             if name == 'ct':
+                c, s, h, w = data.shape
+                data = data.reshape(-1, h, w)
                 cts = []
                 for i in range(data.shape[0]):
                     cts.append(Image.fromarray(data[i]))
@@ -124,12 +127,19 @@ class RandomRotate3D(object):
                     ct = np.array(ct).astype(np.float32)
                     cts_out.append(ct)
                 ct_image = np.asarray(cts_out)
+                ct_image = ct_image.reshape(c, s, h, w)
                 new_sample['ct'] = ct_image
 
             elif 'seg' in name:
-                label = Image.fromarray(data)
-                label = label.rotate(rotate_degree, Image.NEAREST)
-                label = np.array(label).astype(np.float32)
+                labels = []
+                for i in range(data.shape[0]):
+                    labels.append(Image.fromarray(data[i]))
+                labels_out = []
+                for label in labels:
+                    label = label.rotate(rotate_degree, Image.NEAREST)
+                    label = np.array(label).astype(np.float32)
+                    labels_out.append(label)
+                label = np.asarray(labels_out)
                 new_sample[name] = label
         return new_sample
 
@@ -202,28 +212,28 @@ class RandomFlip3D(object):
             if name == 'ct':
                 if 'h' in self.mode and 'v' in self.mode:
                     if random_factor < 0.3:
-                        data = data[:, :, ::-1]
+                        data = data[:, :, :, ::-1]
                     elif random_factor < 0.6:
-                        data = data[:, ::-1, :]
+                        data = data[:, :, ::-1, :]
                 elif 'h' in self.mode:
                     if random_factor > 0.5:
-                        data = data[:, :, ::-1]
+                        data = data[:, :, :, ::-1]
                 elif 'v' in self.mode:
                     if random_factor > 0.5:
-                        data = data[:, ::-1, :]
+                        data = data[:, :, ::-1, :]
                 new_sample['ct'] = data.copy()
             elif 'seg' in name:
                 if 'h' in self.mode and 'v' in self.mode:
                     if random_factor < 0.3:
-                        data = data[:, ::-1]
+                        data = data[:, :, ::-1]
                     elif random_factor < 0.6:
-                        data = data[::-1, :]
+                        data = data[:, ::-1, :]
                 elif 'h' in self.mode:
                     if random_factor > 0.5:
-                        data = data[:, ::-1]
+                        data = data[:, :, ::-1]
                 elif 'v' in self.mode:
                     if random_factor > 0.5:
-                        data = data[::-1, :]
+                        data = data[:, ::-1, :]
                 new_sample[name] = data.copy()
         return new_sample
 
@@ -271,11 +281,15 @@ class DataGenerator3D(Dataset):
         T2W = torch.Tensor(hdf5_reader(self.path_list[index], 'T2W'))
         R2 = torch.Tensor(hdf5_reader(self.path_list[index], 'R2'))
         seg = torch.Tensor(hdf5_reader(self.path_list[index], 'seg')).permute(0, 2, 1)
-        transform = transforms.Resize(size=(1024, 1024))
+        transform = monai.transforms.Compose([
+            monai.transforms.SpatialPad(spatial_size=(128,512,512), method='symmetric'),  # Pad if smaller than target size
+            monai.transforms.CenterSpatialCrop(roi_size=(128,512,512))  # Crop to target size
+        ])
         ct = torch.stack([PSIR, T1W, T2W, R2])
         ct = transform(ct).numpy()
-        seg_transform = transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)
-        seg = seg_transform(seg).numpy()
+        # seg_transform = monai.transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)
+        # seg = seg_transform(seg).numpy()
+        seg = transform(seg.unsqueeze(0)).numpy().squeeze(0)
 
         sample = {'ct': ct, 'seg': seg}
         # Transform

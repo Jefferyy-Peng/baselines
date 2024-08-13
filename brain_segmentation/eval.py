@@ -6,7 +6,9 @@ import random
 import re
 from collections import OrderedDict
 import seaborn as sns
+from matplotlib.colors import ListedColormap, BoundaryNorm
 from monai.transforms import Resize
+import matplotlib.patches as mpatches
 
 import torch.nn as nn
 
@@ -165,6 +167,18 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     # Iterate over each slice
     fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 8))
 
+    # Define a custom colormap
+    colors = [(0, 0, 0, 0),  # Red with alpha 0
+              (1, 0, 0, 1),  # Green with alpha 1
+              (0, 1, 0, 1),  # Blue with alpha 1
+              (0, 0, 1, 1)]  # Purple with alpha 1  # Colors for values 0, 1, 2, 3
+    cmap = ListedColormap(colors)
+    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5]  # Boundaries between data values
+    norm = BoundaryNorm(bounds, cmap.N)
+
+    labels = ['bg', 'caudate', 'globus', 'putamen']
+    patches = [mpatches.Patch(color=cmap(i / 3), label=labels[i]) for i in range(4)]
+
         # Plot image slice
     ax = axes[0]
     ax.imshow(img2D, cmap='gray')
@@ -172,20 +186,18 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     ax.axis('off')
 
         # Plot previous mask slice
-    cmap = plt.cm.get_cmap('viridis', 4)
-    cmap.colors[0, 3] = 0
     ax = axes[1]
+    ax.legend(handles=patches, loc='best', title='Legend')
     ax.imshow(img2D, cmap='gray')
-    ax.imshow(prev_masks, cmap=cmap, alpha=0.5)
+    ax.imshow(prev_masks, cmap=cmap, norm=norm, alpha=0.15, interpolation='none')
     ax.set_title(f'Predict Mask')
     ax.axis('off')
 
         # Plot ground truth slice
-    cmap = plt.cm.get_cmap('viridis', 4)
-    cmap.colors[0, 3] = 0
     ax = axes[2]
+    ax.legend(handles=patches, loc='best', title='Legend')
     ax.imshow(img2D, cmap='gray')
-    ax.imshow(gt2D, cmap=cmap, alpha=0.5)
+    ax.imshow(gt2D, cmap=cmap, norm=norm, alpha=0.15, interpolation='none')
     ax.set_title(f'Ground Truth')
     ax.axis('off')
 
@@ -475,6 +487,104 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation)
     # os.system(f'touch result.txt')
     # os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
 
+def plot_all(net, train_path, val_path, ckpt_path, log_dir, device):
+    ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
+
+    state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
+
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = k.replace('module.', '')  # remove `module.` prefix
+        new_state_dict[name] = v
+
+    net.load_state_dict(new_state_dict)
+    net.eval()
+    net = net.to(device)
+    net = DataParallel(net)
+    plot_path = os.path.join(log_dir, 'plots')
+    os.makedirs(plot_path, exist_ok=True)
+    train_transformer = transforms.Compose([
+        Normalize(),
+        # tio.CropOrPad(target_shape=(32, 128, 128)),
+        To_Tensor(num_class=2, input_channel=3)
+    ])
+    train_dataset = DataGenerator(train_path, transform=train_transformer, mode='val')
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=True
+    )
+    val_transformer = transforms.Compose([
+        Normalize(),
+        # tio.CropOrPad(target_shape=(32, 128, 128)),
+        To_Tensor(num_class=2, input_channel=3)
+    ])
+
+    val_dataset = DataGenerator(val_path,  transform=val_transformer, mode='val')
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=True
+    )
+
+    with torch.no_grad():
+        for step, (sample, data_path) in enumerate(tqdm(train_loader)):
+            data = sample['ct']
+            targets = sample['seg'].to(device)
+            data = data.to(device)
+
+            with autocast(False):
+                logits = torch.softmax(net(data), dim=1)
+                output = torch.argmax(logits, dim=1)
+                # if isinstance(output, tuple):
+                #     output = output[0]
+            # multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
+            # preds = []
+            # for slices in logits[:,-1,:,:].detach().cpu().numpy():
+            #     preds.append(extract_lesion_candidates(np.expand_dims(slices, axis=-1), threshold=0.5)[0])
+            # for y_det, y_true in zip(preds, [lesion_target[:, 0]]):
+            #     y_list, *_ = evaluate_case(
+            #         y_det=y_det,
+            #         y_true=y_true.permute(1, 2, 0).detach().cpu().numpy(),
+            #     )
+            #
+            #     # aggregate all validation evaluations
+            #     lesion_results.append(y_list)
+            plot_segmentation2D(data[0,0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy(), output.squeeze(0).detach().cpu(),
+                                targets.squeeze(0).detach().cpu().numpy(), log_dir,
+                                f'{data_path[0].split("/")[-1].split(".")[0]}', image_dice=None)
+    with torch.no_grad():
+        for step, (sample, data_path) in enumerate(tqdm(val_loader)):
+            data = sample['ct']
+            targets = sample['seg'].to(device)
+            data = data.to(device)
+
+            with autocast(False):
+                logits = torch.softmax(net(data), dim=1)
+                output = torch.argmax(logits, dim=1)
+                # if isinstance(output, tuple):
+                #     output = output[0]
+            # multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
+            # preds = []
+            # for slices in logits[:,-1,:,:].detach().cpu().numpy():
+            #     preds.append(extract_lesion_candidates(np.expand_dims(slices, axis=-1), threshold=0.5)[0])
+            # for y_det, y_true in zip(preds, [lesion_target[:, 0]]):
+            #     y_list, *_ = evaluate_case(
+            #         y_det=y_det,
+            #         y_true=y_true.permute(1, 2, 0).detach().cpu().numpy(),
+            #     )
+            #
+            #     # aggregate all validation evaluations
+            #     lesion_results.append(y_list)
+            plot_segmentation2D(data[0,0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy(), output.squeeze(0).detach().cpu(),
+                                targets.squeeze(0).detach().cpu().numpy(), log_dir,
+                                f'{data_path[0].split("/")[-1].split(".")[0]}', image_dice=None)
+
 def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode='normal',):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
 
@@ -606,13 +716,15 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
 
 
 if __name__ == '__main__':
-    # PATH_DIR = './dataset/ucsd_multi_contrast_segdata/data_2d'
-    # PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.h5'))
-    # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
+    # config for seg PHASE and plot_all PHASE
+    PATH_DIR = './dataset/ucsd_multi_contrast_segdata/data_2d'
+    PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.h5'))
+    train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
 
-    PATH_AP = './dataset/ucsd_multi_contrast_segdata/data_3d'
-    AP_LIST = glob.glob(os.path.join(PATH_AP, '*.h5'))
-    train_AP, val_AP = get_cross_validation_by_3D_sample(AP_LIST, FOLD_NUM, 1)
+    # config for detect PHASE
+    # PATH_AP = './dataset/ucsd_multi_contrast_segdata/data_3d'
+    # AP_LIST = glob.glob(os.path.join(PATH_AP, '*.h5'))
+    # train_AP, val_AP = get_cross_validation_by_3D_sample(AP_LIST, FOLD_NUM, 1)
 
     mode = 'normal'
 
@@ -653,7 +765,7 @@ if __name__ == '__main__':
     #     image_size=512
     # )
 
-    PHASE = 'detect'
+    PHASE = 'plot_all'
 
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
     ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_ucsd_weighted_focal_lr_0.0001_weight_decay_0.001')
@@ -662,5 +774,7 @@ if __name__ == '__main__':
     log_dir = './new_log/eval/UNetWeightedFocal'
     if PHASE == 'seg':
         plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:1', activation)
-    else:
+    elif PHASE == 'detect':
         plot_eval_detect(net, val_AP, ckpt_path, log_dir, 'cuda', activation, mode)
+    elif PHASE == 'plot_all':
+        plot_all(net, train_path, val_path, ckpt_path, log_dir, 'cuda:0')

@@ -7,10 +7,12 @@ import h5py
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
 from picai_eval.eval import evaluate_case
 from report_guided_annotation import extract_lesion_candidates
 from skimage.metrics import hausdorff_distance
 import torch.nn.functional as F
+import matplotlib.patches as mpatches
 
 
 def one_hot_encode(tensor, num_classes):
@@ -22,7 +24,10 @@ def one_hot_encode(tensor, num_classes):
     :return: One-hot encoded tensor of shape (N, num_classes, H, W).
     """
     assert tensor.dtype == torch.long, "Target tensor must be of type torch.long"
-    return F.one_hot(tensor, num_classes).permute(0, 3, 1, 2).float()
+    if tensor.dim() == 3:
+        return F.one_hot(tensor, num_classes).permute(0, 3, 1, 2).float()
+    elif tensor.dim() == 4:
+        return F.one_hot(tensor, num_classes).permute(0, 4, 1, 2, 3).float()
 
 
 def dice_score_per_class(preds, targets, num_classes, smooth=1.0):
@@ -43,8 +48,12 @@ def dice_score_per_class(preds, targets, num_classes, smooth=1.0):
     targets_one_hot = one_hot_encode(targets, num_classes)
 
     # Compute the intersection and union for each class
-    intersection = (preds_one_hot * targets_one_hot).sum(dim=(2, 3))
-    union = preds_one_hot.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
+    if targets_one_hot.dim() == 4:
+        intersection = (preds_one_hot * targets_one_hot).sum(dim=(-2, -1))
+        union = preds_one_hot.sum(dim=(-2, -1)) + targets_one_hot.sum(dim=(-2, -1))
+    elif targets_one_hot.dim() == 5:
+        intersection = (preds_one_hot * targets_one_hot).sum(dim=(-3, -2, -1))
+        union = preds_one_hot.sum(dim=(-3, -2, -1)) + targets_one_hot.sum(dim=(-3, -2, -1))
 
     # Compute the Dice score for each class
     dice_scores = (2.0 * intersection + smooth) / (union + smooth)
@@ -125,6 +134,61 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     plt.tight_layout()
     plt.savefig(os.path.join(save_path, f'{count}.png'))
     plt.close()
+
+def plot_segmentation3D(img3D, prev_masks, gt3D, save_path, count, image_dice=None):
+    """
+        Plot each slice of a 3D image, its corresponding previous mask, and ground truth mask.
+
+        Parameters:
+        img3D (numpy.ndarray): The 3D image array of shape (depth, height, width).
+        prev_masks (numpy.ndarray): The 3D array of previous masks of shape (depth, height, width).
+        gt3D (numpy.ndarray): The 3D array of ground truth masks of shape (depth, height, width).
+        slice_axis (int): The axis along which to slice the image (0=depth, 1=height, 2=width).
+        """
+    os.makedirs(save_path, exist_ok=True)
+
+    # Define a custom colormap
+    colors = [(0, 0, 0, 0),  # Red with alpha 0
+              (1, 0, 0, 1),  # Green with alpha 1
+              (0, 1, 0, 1),  # Blue with alpha 1
+              (0, 0, 1, 1)]  # Purple with alpha 1  # Colors for values 0, 1, 2, 3
+    cmap = ListedColormap(colors)
+    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5]  # Boundaries between data values
+    norm = BoundaryNorm(bounds, cmap.N)
+
+    labels = ['bg', 'caudate', 'globus', 'putamen']
+    patches = [mpatches.Patch(color=cmap(i / 3), label=labels[i]) for i in range(4)]
+
+    for i, slice in enumerate(img3D):
+        # Iterate over each slice
+        fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 8))
+
+            # Plot image slice
+        ax = axes[0]
+        ax.imshow(slice, cmap='gray')
+        ax.set_title(f'Image')
+        ax.axis('off')
+
+            # Plot previous mask slice
+        ax = axes[1]
+        ax.legend(handles=patches, loc='best', title='Legend')
+        ax.imshow(slice, cmap='gray')
+        ax.imshow(prev_masks[i], cmap=cmap, norm=norm, alpha=0.15, interpolation='none')
+        ax.set_title(f'Predict Mask')
+        ax.axis('off')
+
+            # Plot ground truth slice
+        ax = axes[2]
+        ax.legend(handles=patches, loc='best', title='Legend')
+        ax.imshow(slice, cmap='gray')
+        ax.imshow(gt3D[i], cmap=cmap, norm=norm, alpha=0.15, interpolation='none')
+        ax.set_title(f'Ground Truth')
+        ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_path, f'{count}_{i}.png'))
+        plt.close()
+
 def compute_results_detect(logits, target, results):
     preds = []
     logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits

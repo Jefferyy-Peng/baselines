@@ -26,16 +26,22 @@ import torch.nn as nn
 from segment_anything import sam_model_registry
 from model_single import ModelEmb, SegDecoderCNN
 from peft import get_peft_model, LoraConfig, TaskType
+from monai.transforms import RandRotate, RandFlip
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
-                         RandomRotate2D, To_Tensor)
+                         RandomRotate2D, To_Tensor, RandomRotate3D, RandomFlip3D, DataGenerator3D)
 from loss import Deep_Supervised_Loss
 from utils import plot_segmentation2D, transform_mask_to_single_channel, one_hot_encode, \
-    dice_score_per_class
+    dice_score_per_class, plot_segmentation3D
 from utils import dfs_remove_weight, poly_lr, compute_results_detect
+from picai_baseline.unet.training_setup.neural_networks.unets import UNet
 
 warnings.filterwarnings('ignore')
-class UNet(nn.Module):
+def issue_warning():
+    print("Warning: The log path already exists, continue will overwrite the log and ckpt")
+    input("Press Enter to continue...")
+
+class UNet2d(nn.Module):
 
     def __init__(self, in_channels=3, out_channels=1, init_features=32):
         super(UNet, self).__init__()
@@ -148,7 +154,7 @@ def compute_results(logits, target, results):
 class SemanticSeg(object):
     def __init__(self,lr=1e-3,n_epoch=1,channels=4,num_classes=2, input_shape=(384,384),batch_size=6,num_workers=0,
                   device=None,pre_trained=False,ckpt_point=True,weight_path=None,weight_decay=0.0001,
-                  use_fp16=False,transformer_depth = 18):
+                  use_fp16=False,transformer_depth = 18, mode='2d'):
         super(SemanticSeg,self).__init__()
         self.lr = lr
         self.n_epoch = n_epoch
@@ -175,7 +181,12 @@ class SemanticSeg(object):
         # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
         # using UNet need to disable all sigmoid activation function
         # self.net = DataParallel(UNet(in_channels=4, out_channels=4, init_features=32))
-        self.net = DataParallel(UNet(in_channels=4, out_channels=4, init_features=32), device_ids=[0,1,2,3,4,5])
+        # self.net = DataParallel(UNet2d(in_channels=4, out_channels=4, init_features=32), device_ids=[0,1,2,3,4,5, 6, 7])
+        self.net = UNet(spatial_dims=3,
+            in_channels=4,
+            out_channels=4,
+            strides=[(2, 2, 2), (1, 2, 2), (1, 2, 2), (1, 2, 2), (2, 2, 2)],
+            channels=[32, 64, 128, 256, 512, 1024])
 
 
         # sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
@@ -226,14 +237,24 @@ class SemanticSeg(object):
 
         if self.pre_trained:
             self._get_pre_trained(self.weight_path,ckpt_point)
-
-        self.train_transform = [
-            Normalize(),   #1
-            # tio.CropOrPad(target_shape=(32, 128, 128)),
-            RandomRotate2D(),  #6
-            RandomFlip2D(mode='hv'),  #7
-            To_Tensor(num_class=self.num_classes, input_channel = self.channels)   # 10
-        ]
+        if mode == '2d':
+            self.train_transform = [
+                Normalize(),   #1
+                # tio.CropOrPad(target_shape=(32, 128, 128)),
+                RandomRotate2D(),  #6
+                RandomFlip2D(mode='hv'),  #7
+                To_Tensor(num_class=self.num_classes, input_channel = self.channels)   # 10
+            ]
+        elif mode == '3d':
+            self.train_transform = [
+                Normalize(),  # 1
+                # tio.CropOrPad(target_shape=(32, 128, 128)),
+                # RandRotate(range_x=0, range_y=(-20, 20), range_z=(-20, 20), prob=1.0, keep_size=True),  # 6
+                # RandFlip(prob=0.3, spatial_axis=(1, 2)),  # 7
+                RandomRotate3D(),
+                RandomFlip3D(mode='hv'),
+                To_Tensor(num_class=self.num_classes, input_channel=self.channels)  # 10
+            ]
 
     def plot_eval(self, number_plots, val_path, ckpt_path, log_dir, device):
         net = copy.deepcopy(self.net)
@@ -290,6 +311,7 @@ class SemanticSeg(object):
         log_dir = os.path.join(log_dir, "fold"+str(cur_fold))
 
         if os.path.exists(log_dir):
+            issue_warning()
             if not self.pre_trained:
                 shutil.rmtree(log_dir)
                 os.makedirs(log_dir)
@@ -445,6 +467,180 @@ class SemanticSeg(object):
         self.writer.close()
         dfs_remove_weight(output_dir,retain=3)
 
+    def trainer_3d(self, train_path, val_path, val_ap, cur_fold, output_dir=None, log_dir=None, phase='seg',
+                activation=True):
+
+        torch.manual_seed(0)
+        np.random.seed(0)
+        torch.cuda.manual_seed_all(0)
+        print('Device:{}'.format(self.device))
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.enabled = True
+        torch.backends.cudnn.benchmark = True
+
+        output_dir = os.path.join(output_dir, "fold" + str(cur_fold))
+        log_dir = os.path.join(log_dir, "fold" + str(cur_fold))
+
+        if os.path.exists(log_dir):
+            issue_warning()
+            if not self.pre_trained:
+                shutil.rmtree(log_dir)
+                os.makedirs(log_dir)
+        else:
+            os.makedirs(log_dir)
+
+        if os.path.exists(output_dir):
+
+            if not self.pre_trained:
+                shutil.rmtree(output_dir)
+                os.makedirs(output_dir)
+        else:
+            os.makedirs(output_dir)
+
+        self.step_pre_epoch = len(train_path) // self.batch_size
+        self.writer = SummaryWriter(log_dir)
+        self.global_step = self.start_epoch * math.ceil(len(train_path) / self.batch_size)
+
+        net = self.net
+        lr = self.lr
+        loss = Deep_Supervised_Loss(mode='Focal', activation=activation)
+
+        # dataloader setting
+        train_transformer = transforms.Compose(self.train_transform)
+
+        train_dataset = DataGenerator3D(train_path, transform=train_transformer)
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True
+        )
+        val_transformer = transforms.Compose([
+            Normalize(),
+            # tio.Resize(target_shape=(24, 128, 128)),
+            # tio.CropOrPad(target_shape=(32, 128, 128)),
+            To_Tensor(num_class=self.num_classes, input_channel=self.channels)
+        ])
+        val_dataset = DataGenerator3D(val_path, transform=val_transformer)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True
+        )
+
+        # copy to gpu
+        net = net.to(self.device)
+        loss = loss.to(self.device)
+
+        # optimizer setting
+        optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=self.weight_decay)
+
+        scaler = GradScaler()
+
+        early_stopping = EarlyStopping(patience=50, verbose=True, monitor='val_score', op_type='max')
+
+        epoch = self.start_epoch
+        optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr=lr)
+
+        while epoch < self.n_epoch:
+            train_loss, caudate_train_dice, putamen_train_dice, globus_train_dice = self._train_on_epoch(epoch, net,
+                                                                                                         loss,
+                                                                                                         optimizer,
+                                                                                                         train_loader,
+                                                                                                         scaler,
+                                                                                                         activation=activation)
+            self.writer.add_scalar(
+                'data/train_loss', train_loss, epoch
+            )
+            self.writer.add_scalar('data/caudate_train_dice', caudate_train_dice, epoch)
+            self.writer.add_scalar('data/putamen_train_dice', putamen_train_dice, epoch)
+            self.writer.add_scalar('data/globus_train_dice', globus_train_dice, epoch)
+
+            self.writer.add_scalar(
+                'data/train_loss_epochs', train_loss, epoch
+            )
+
+            if phase == 'seg':
+                val_loss, caudate_val_dice, putamen_val_dice, globus_val_dice, caudate_positive_dice, putamen_positive_dice, globus_positive_dice = self._val_on_epoch(
+                    epoch, net, loss, val_loader, activation=activation)
+                self.writer.add_scalar(
+                    'data/eval_loss_epochs', val_loss, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_caudate_dice_epochs', caudate_val_dice, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_putamen_dice_epochs', putamen_val_dice, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_globus_dice_epochs', globus_val_dice, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_caudate_positive_dice_epochs', caudate_positive_dice, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_putamen_positive_dice_epochs', putamen_positive_dice, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_globus_positive_dice_epochs', globus_positive_dice, epoch
+                )
+
+                score = (caudate_val_dice + putamen_val_dice + globus_val_dice) / 3
+            else:
+                auc, ap = self.val(epoch, val_ap, net, mode='train')
+                score = (ap + auc) / 2
+
+            optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr=lr)
+
+            torch.cuda.empty_cache()
+
+            self.writer.add_scalar(
+                'data/lr', optimizer.param_groups[0]['lr'], epoch
+            )
+
+            early_stopping(score)
+
+            # save
+            if score > self.metrics_threshold:
+                self.metrics_threshold = score
+
+                if len(self.device.split(',')) > 1:
+                    state_dict = net.module.state_dict()
+                else:
+                    state_dict = net.state_dict()
+
+                saver = {
+                    'epoch': epoch,
+                    'save_dir': output_dir,
+                    'state_dict': state_dict,
+                }
+
+                if phase == 'seg':
+                    file_name = 'epoch:{}-caudate_val_dice:{:.5f}-putamen_val_dice:{:.5f}-globus_val_dice:{:.5f}.pth'.format(
+                        epoch, caudate_val_dice, putamen_val_dice, globus_val_dice)
+                else:
+                    file_name = 'epoch:{}-train_loss:{:.5f}-train_dice:{:.5f}-train_run_dice:{:.5f}-val_auroc:{:.5f}-val_ap:{:.5f}-val_score:{:.5f}.pth'.format(
+                        epoch, train_loss, train_dice, train_run_dice, ap.auroc, ap.AP, ap.score)
+                save_path = os.path.join(output_dir, file_name)
+                print("Save as: %s" % file_name)
+
+                torch.save(saver, save_path)
+
+            epoch += 1
+
+            # early stopping
+            if early_stopping.early_stop:
+                print("Early stopping")
+                break
+
+        self.plot_eval(100, val_path, output_dir, log_dir, device='cuda')
+        self.writer.close()
+        dfs_remove_weight(output_dir, retain=3)
+
     def _train_on_epoch(self,epoch,net,criterion,optimizer,train_loader,scaler, activation=True, plot=False):
         net.train()
 
@@ -471,7 +667,11 @@ class SemanticSeg(object):
 
             if plot:
                 for id, img in enumerate(data):
-                    plot_segmentation2D(img[:3].permute(1,2,0).detach().cpu().numpy(), torch.argmax(torch.softmax(output[id, ...], dim=1), dim=1).detach().cpu(),
+                    # plot_segmentation2D(img[:3].permute(1, 2, 0).detach().cpu().numpy(),
+                    #                     torch.argmax(torch.softmax(output[id, ...], dim=1), dim=1).detach().cpu(),
+                    #                     targets[id, ...].detach().cpu().numpy(), f'./train_plot',
+                    #                     f'{id}', image_dice=None)
+                    plot_segmentation3D(img[:3].permute(1,2,3,0).detach().cpu().numpy(), torch.argmax(torch.softmax(output[id, ...], dim=0), dim=0).detach().cpu(),
                                             targets[id, ...].detach().cpu().numpy(), f'./train_plot',
                                             f'{id}', image_dice=None)
 
@@ -545,8 +745,12 @@ class SemanticSeg(object):
 
                 if plot:
                     for id, img in enumerate(data):
-                        plot_segmentation2D(img[:3].permute(1, 2, 0).detach().cpu().numpy(),
-                                            torch.argmax(torch.softmax(output[id, ...], dim=1), dim=1).detach().cpu(),
+                        # plot_segmentation2D(img[:3].permute(1, 2, 0).detach().cpu().numpy(),
+                        #                     torch.argmax(torch.softmax(output[id, ...], dim=1), dim=1).detach().cpu(),
+                        #                     targets[id, ...].detach().cpu().numpy(), f'./val_plot',
+                        #                     f'{id}', image_dice=None)
+                        plot_segmentation3D(img[:3].permute(1, 2, 3, 0).detach().cpu().numpy(),
+                                            torch.argmax(torch.softmax(output[id, ...], dim=0), dim=0).detach().cpu(),
                                             targets[id, ...].detach().cpu().numpy(), f'./val_plot',
                                             f'{id}', image_dice=None)
                 loss = criterion(output, targets.long())

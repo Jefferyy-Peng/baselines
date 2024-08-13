@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'UNet_ucsd_weighted_focal'
+VERSION = 'UNet3d_ucsd_weighted_focal'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -22,7 +22,7 @@ CURRENT_FOLD = 5
 GPU_NUM = len(DEVICE.split(','))
 
 #--------------------------------- mode and data path setting
-PATH_DIR = './dataset/ucsd_multi_contrast_segdata/data_2d'
+PATH_DIR = './dataset/ucsd_multi_contrast_segdata/data_3d'
 PATH_LIST = glob.glob(os.path.join(PATH_DIR,'*.h5'))
 PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
 AP_LIST = glob.glob(os.path.join(PATH_AP,'*.h5'))
@@ -36,14 +36,15 @@ print(WEIGHT_PATH)
 INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
-  'batch_size': 40,
-  'num_workers':12,
+  'batch_size': 1,
+  'num_workers':32,
   'device':'cuda',
   'pre_trained':PRE_TRAINED,
   'ckpt_point':CKPT_POINT,
   'weight_path':WEIGHT_PATH,
   'use_fp16':False,
-  'transformer_depth': TRANSFORMER_DEPTH
+  'transformer_depth': TRANSFORMER_DEPTH,
+  'mode': '3d'
  }
 #---------------------------------
 
