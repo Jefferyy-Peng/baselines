@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'MedSAMAuto_FocalDice_Unified_rate_0.4_weighted_loss_combined_label'
+VERSION = 'MedSAMAuto_FocalDice_Unified_rate_0.4_weighted_loss_combined_label_test'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3

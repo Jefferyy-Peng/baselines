@@ -410,9 +410,9 @@ class SemanticSeg(object):
             if plot:
                 pred = torch.sigmoid(output)
                 for id, img in enumerate(data):
-                    plot_segmentation2D(img.permute(1, 2, 0).detach().cpu().numpy(),
+                    plot_segmentation2D(img.permute(1, 2, 0)[..., 0].unsqueeze(-1).expand(-1,-1,3).detach().cpu().numpy(),
                                             (pred[id, -1, ...] > 0.5).detach().cpu(),
-                                            lesion_target[0, id, ...].detach().cpu().numpy(), f'./train_plot',
+                                            gland_target[0, id, ...].detach().cpu().numpy(), f'./train_plot',
                                             f'{id}', image_dice=None)
 
             optimizer.zero_grad()

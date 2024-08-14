@@ -584,7 +584,7 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, post
             FN_lesion_level += 1
         else:
             raise NotImplementedError
-    conf_matrix_lesion_level = np.array([[TN_lesion_level, FP_lesion_level], [FN_lesion_level, TP_lesion_level]])
+    conf_matrix_lesion_level = np.array([[TN_patient_level, FP_lesion_level], [FN_lesion_level, TP_lesion_level]])
     plt.figure(figsize=(8, 6))
     sns.heatmap(conf_matrix_lesion_level, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted 0', 'Predicted 1'],
                 yticklabels=['Actual 0', 'Actual 1'])
@@ -670,7 +670,7 @@ if __name__ == '__main__':
     ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateErodeDilate'
+    log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRateReproduce'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
         plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:0', activation, is_post_process)
