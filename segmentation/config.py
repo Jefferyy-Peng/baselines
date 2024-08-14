@@ -4,7 +4,7 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'MedSAMAuto_FocalDice_Unified_equal_rate_weighted_loss'
+VERSION = 'MedSAMAuto_FocalDice_Unified_rate_0.4_weighted_loss_combined_label'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -22,9 +22,9 @@ CURRENT_FOLD = 5
 GPU_NUM = len(DEVICE.split(','))
 
 #--------------------------------- mode and data path setting
-PATH_DIR = './dataset/lesion_segdata_human_all/data_2d'
+PATH_DIR = './dataset/lesion_segdata_combined/data_2d'
 PATH_LIST = glob.glob(os.path.join(PATH_DIR,'*.hdf5'))
-PATH_AP = './dataset/lesion_segdata_human_all/data_3d'
+PATH_AP = './dataset/lesion_segdata_combined/data_3d'
 AP_LIST = glob.glob(os.path.join(PATH_AP,'*.hdf5'))
 #--------------------------------- 
 

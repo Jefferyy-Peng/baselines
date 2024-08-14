@@ -38,7 +38,9 @@ from TransUNet import VisionTransformer, CONFIGS
 
 warnings.filterwarnings('ignore')
 
-
+def issue_warning():
+    print("Warning: The log path already exists, continue will overwrite the log and ckpt")
+    input("Press Enter to continue...")
 
 def compute_results(logits, target, results):
     preds = []
@@ -200,6 +202,7 @@ class SemanticSeg(object):
         log_dir = os.path.join(log_dir, "fold"+str(cur_fold))
 
         if os.path.exists(log_dir):
+            issue_warning()
             if not self.pre_trained:
                 shutil.rmtree(log_dir)
                 os.makedirs(log_dir)
@@ -230,7 +233,7 @@ class SemanticSeg(object):
 
         lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
         zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
-        gland_pid = pickle.load(open('./dataset/gland_segdata_partial/gland_pid.p', 'rb'))
+        gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
         train_dataset = MultiLevelDataGenerator(train_path, 'train', num_class=self.num_classes,transform=train_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
 
         train_loader = DataLoader(
@@ -522,7 +525,7 @@ class SemanticSeg(object):
                     for id, img in enumerate(data):
                         plot_segmentation2D(img.permute(1, 2, 0).detach().cpu().numpy(),
                                             (logits[id, -1, ...] > 0.5).detach().cpu(),
-                                            lesion_target[0, id, ...].detach().cpu().numpy(), f'./train_plot',
+                                            lesion_target[0, id, ...].detach().cpu().numpy(), f'./test',
                                             f'{id}', image_dice=None)
                 output = (logits > 0.5).int().detach().cpu().numpy()  # N*H*W
                 # target = target.detach().cpu().numpy()

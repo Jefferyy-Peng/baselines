@@ -38,8 +38,11 @@ def store_images_labels_2d(save_path, patient_id, cts, labels):
     for i in range(labels.shape[0]):
         ct = cts[:,i,:,:]
         lab = labels[i,:,:]
-        if lab.max() == 0:
-            continue
+
+        # comment to obtain all data, including slices with no lesion
+        # if lab.max() == 0:
+        #     continue
+
         # if 2 not in np.unique(lab) or 1 not in np.unique(lab):
         #     continue
         # else:
@@ -101,7 +104,7 @@ def make_segdata(base_dir,label_dir,output_dir):
         save_as_hdf5(seg_image,hdf5_path,'seg')
 
         # count -> path for lesion, path -> count for gland and zone
-        pid_dict[path] = count
+        pid_dict[count] = path
         store_images_labels_2d(data_dir_2d,count,img,seg_image)
 
         count += 1
@@ -121,7 +124,7 @@ def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
     if not os.path.exists(data_dir_3d):
         os.makedirs(data_dir_3d)
 
-    label_dict = csv_reader_single(csv_path, key_col='id', value_col='label')
+    # label_dict = csv_reader_single(csv_path, key_col='id', value_col='label')
 
     count = 0
 
@@ -196,7 +199,7 @@ if __name__ == "__main__":
     phase = 'seg'
     base_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
     label_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
-    output_dir = './dataset/gland_segdata_partial'
+    output_dir = './dataset/gland_segdata'
     test_dir = 'path/to/nnUNet_test_data'
     seg_dir = 'path/to/segmentation_result'
     csv_path = 'path/to/classification_result'

@@ -277,7 +277,7 @@ class MultiLevelDataGenerator(Dataset):
                     lesion_path_list[idx].replace(PATH_DIR.split('/')[2], 'zone_segdata_all').replace(
                         '/' + str(lesion_count), '/' + str(this_zone_count)), 'seg'))
                 gland_seg = torch.Tensor(hdf5_reader(
-                    lesion_path_list[idx].replace(PATH_DIR.split('/')[2], 'gland_segdata_partial').replace(
+                    lesion_path_list[idx].replace(PATH_DIR.split('/')[2], 'gland_segdata').replace(
                         '/' + str(lesion_count), '/' + str(this_gland_count)), 'seg'))
             except:
                 # print('here1')
@@ -316,7 +316,7 @@ class MultiLevelDataGenerator(Dataset):
                 ct = torch.Tensor(hdf5_reader(path, 'ct'))
                 lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
         else:
-            if np.random.choice(2, 1, p=[1-0.5, 0.5]) == 0:
+            if np.random.choice(2, 1, p=[1-0.4, 0.4]) == 0:
                 index = index % len(self.path_list1)
                 #index = np.random.randint(len(self.img_path1))
                 path = self.path_list1[index]
@@ -335,7 +335,7 @@ class MultiLevelDataGenerator(Dataset):
         gland_count = self.gland_pid[lesion_pid]
         # use zone_segdata_all for all data
         zone_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
-        gland_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'gland_segdata_partial').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
+        gland_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
         lesion_seg = create_binary_masks(lesion_seg)
         zone_seg = create_binary_masks_zone(zone_seg)
         gland_seg = create_binary_masks(gland_seg)

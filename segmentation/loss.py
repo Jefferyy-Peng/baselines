@@ -6,7 +6,7 @@ import torch.nn.functional as F
 class FocalLoss(nn.Module):
     """Focal loss function for binary segmentation."""
 
-    def __init__(self, alpha=0.97, gamma=2, num_classes=2, activation=True, reduction="mean"):
+    def __init__(self, alpha=0.6, gamma=2, num_classes=2, activation=True, reduction="mean"):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -36,7 +36,7 @@ class FocalLoss(nn.Module):
 class DiceLoss(nn.Module):
     """Focal loss function for binary segmentation."""
 
-    def __init__(self, alpha=0.99, gamma=2, weight=None, activation=True, reduction="mean", smooth=1e-5):
+    def __init__(self, alpha=0.99, gamma=2, weight=None, activation=True, reduction="mean", smooth=1):
         super(DiceLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -61,10 +61,11 @@ class DiceLoss(nn.Module):
         dice_score = (2.0 * intersection + self.smooth) / (union + self.smooth)
 
         # Weight by channels
-        weighted_dice_score = (dice_score * self.weight.to(dice_score.device)).sum(dim=1)
+        if self.weight is not None:
+            dice_score = (dice_score * self.weight.to(dice_score.device)).sum(dim=1)
 
         # Compute Dice loss
-        dice_loss = 1.0 - weighted_dice_score.mean()
+        dice_loss = 1.0 - dice_score.mean()
 
         return dice_loss
 
@@ -72,7 +73,8 @@ class Deep_Supervised_Loss(nn.Module):
     def __init__(self, mode='FocalDice', activation=True):
         super(Deep_Supervised_Loss, self).__init__()
         self.fl = FocalLoss(activation=activation)
-        self.dl = DiceLoss(activation=activation, weight=torch.tensor([0.2, 0.2, 0.2, 0.4], dtype=torch.float32))
+        # self.dl = DiceLoss(activation=activation, weight=torch.tensor([0.2, 0.2, 0.2, 0.4], dtype=torch.float32))
+        self.dl = DiceLoss(activation=activation)
         self.mode = mode
     def forward(self, input, target):
         if self.mode == 'FocalDice':
