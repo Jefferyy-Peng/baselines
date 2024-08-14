@@ -1,3 +1,4 @@
+import copy
 import os
 import random
 from pathlib import Path
@@ -17,6 +18,19 @@ from pydensecrf.utils import compute_unary, create_pairwise_bilateral,\
 
 from eval_utils import extract_lesion_candidates
 
+
+def add_contour(original_image, mask, color=np.array([240, 128, 128, 0.9]), random_color=False, contour_thickness=7,):
+    # Assuming mask is binary [0, 1], prepare for contour detection
+    mask_uint8 = (mask * 255).astype(np.uint8)
+
+    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Draw contours directly on the copied image
+    cv2.drawContours(original_image, contours, -1, color, contour_thickness)
+
+    # alpha = 0.5  # Transparency factor
+    # cv2.addWeighted(overlay, alpha, image_copy, 1 - alpha, 0, image_copy)
+    return original_image
 
 def get_crf_img(inputs, outputs):
     for i in range(outputs.shape[0]):

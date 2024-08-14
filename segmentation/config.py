@@ -4,7 +4,8 @@ import os
 from utils import get_weight_path
 
 TRANSFORMER_DEPTH = 24
-VERSION = 'MedSAMAuto_Focal_Unified_equal_rate_weighted_loss_crop'
+VERSION = 'MedSAMAuto_Focal_Dice_Unified_equal_rate_weighted_loss_crop'
+# VERSION = 'UNet_all_gland_weighted_Focal'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3

@@ -184,17 +184,49 @@ class DataGenerator(Dataset):
     - transform: the data augmentation methods
     '''
 
-    def __init__(self, path_list, num_class=2, transform=None):
+    def __init__(self, path_list, num_class=2, transform=None, mode='train'):
+        new_path_list1 = []
+        new_path_list2 = []
+        ratios = []
+        for idx, path in enumerate(path_list):
+            lesion_seg = torch.Tensor(hdf5_reader(path_list[idx], 'seg'))
+            tumor_ratio = lesion_seg.sum() / (lesion_seg.shape[0] * lesion_seg.shape[1])
+            if tumor_ratio != 0:
+                ratios.append(tumor_ratio)
+            if tumor_ratio > 0.001:
+                new_path_list2.append(path)
+            else:
+                new_path_list1.append(path)
+        self.path_list1 = new_path_list1
+        self.path_list2 = new_path_list2
         self.path_list = path_list
         self.num_class = num_class
         self.transform = transform
+        self.mode = mode
 
     def __len__(self):
-        return len(self.path_list)
+        if self.mode == 'val':
+            return len(self.path_list)
+        else:
+            return len(self.path_list) * 2
 
     def __getitem__(self, index):
-        ct = torch.Tensor(hdf5_reader(self.path_list[index], 'ct'))
-        seg = torch.Tensor(hdf5_reader(self.path_list[index], 'seg')).unsqueeze(0)
+        if self.mode == 'val':
+            path = self.path_list[index]
+            ct = torch.Tensor(hdf5_reader(path, 'ct'))
+            seg = torch.Tensor(hdf5_reader(path, 'seg')).unsqueeze(0)
+        else:
+            if np.random.choice(2, 1, p=[1-0.4, 0.4]) == 0:
+                index = index % len(self.path_list1)
+                #index = np.random.randint(len(self.img_path1))
+                path = self.path_list1[index]
+                ct = torch.Tensor(hdf5_reader(path, 'ct'))
+                seg = torch.Tensor(hdf5_reader(path, 'seg')).unsqueeze(0)
+            else:
+                index = np.random.randint(len(self.path_list2))
+                path = self.path_list2[index]
+                ct = torch.Tensor(hdf5_reader(path, 'ct'))
+                seg = torch.Tensor(hdf5_reader(path, 'seg')).unsqueeze(0)
         transform = transforms.Resize(size=(1024, 1024))
         ct = transform(ct).numpy()
         seg_transform = transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)

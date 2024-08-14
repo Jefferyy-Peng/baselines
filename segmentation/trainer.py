@@ -49,7 +49,7 @@ def compute_results(logits, target, results):
                              [target[i, :, :] for i in range(target.shape[0])]):
         y_list, *_ = evaluate_case(
             y_det=y_det,
-            y_true=y_true.transpose(1, 2, 0),
+            y_true=np.expand_dims(y_true, axis=-1),
         )
 
         # aggregate all validation evaluations
@@ -86,7 +86,7 @@ class SemanticSeg(object):
         # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
         # using UNet need to disable all sigmoid activation function
         # self.net = DataParallel(torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
-        #                           in_channels=3, out_channels=4 , init_features=32, pretrained=False))
+        #                           in_channels=3, out_channels=1, init_features=32, pretrained=False))
 
         sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
 
@@ -219,7 +219,7 @@ class SemanticSeg(object):
 
         net = self.net
         lr = self.lr
-        loss = Deep_Supervised_Loss(mode='Focal', activation=activation)
+        loss = Deep_Supervised_Loss(mode='FocalDice', activation=activation)
 
         if len(self.device.split(',')) > 1:
             net = DataParallel(net)
@@ -231,7 +231,7 @@ class SemanticSeg(object):
         # lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
         # zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
         # gland_pid = pickle.load(open('./dataset/gland_segdata_partial/gland_pid.p', 'rb'))
-        train_dataset = DataGenerator(train_path, num_class=self.num_classes,transform=train_transformer)
+        train_dataset = DataGenerator(train_path, num_class=self.num_classes,transform=train_transformer, mode='train')
 
         train_loader = DataLoader(
           train_dataset,
@@ -246,7 +246,7 @@ class SemanticSeg(object):
             # tio.CropOrPad(target_shape=(32, 128, 128)),
             To_Tensor(num_class=self.num_classes, input_channel=self.channels)
         ])
-        val_dataset = DataGenerator(val_path, num_class=self.num_classes,transform=val_transformer)
+        val_dataset = DataGenerator(val_path, num_class=self.num_classes,transform=val_transformer, mode='val')
         val_loader = DataLoader(
             val_dataset,
             batch_size=self.batch_size,
@@ -270,17 +270,17 @@ class SemanticSeg(object):
         optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr = lr)
 
         while epoch < self.n_epoch:
-            # train_loss,gland_train_dice,zone_train_dice,lesion_train_dice = self._train_on_epoch(epoch,net,loss,optimizer,train_loader,scaler, activation=activation)
-            # self.writer.add_scalar(
-            #     'data/train_loss', train_loss, epoch
-            # )
-            # self.writer.add_scalar('data/gland_train_dice', gland_train_dice, epoch)
-            # self.writer.add_scalar('data/zone_train_dice', zone_train_dice, epoch)
-            # self.writer.add_scalar('data/lesion_train_dice', lesion_train_dice, epoch)
-            #
-            # self.writer.add_scalar(
-            #     'data/train_loss_epochs', train_loss, epoch
-            # )
+            train_loss,gland_train_dice,zone_train_dice,lesion_train_dice = self._train_on_epoch(epoch,net,loss,optimizer,train_loader,scaler, activation=activation)
+            self.writer.add_scalar(
+                'data/train_loss', train_loss, epoch
+            )
+            self.writer.add_scalar('data/gland_train_dice', gland_train_dice, epoch)
+            self.writer.add_scalar('data/zone_train_dice', zone_train_dice, epoch)
+            self.writer.add_scalar('data/lesion_train_dice', lesion_train_dice, epoch)
+
+            self.writer.add_scalar(
+                'data/train_loss_epochs', train_loss, epoch
+            )
 
             if phase == 'seg':
                 val_loss,gland_val_dice,zone_val_dice,lesion_val_dice, lesion_ap, lesion_auc, lesion_positive_dice = self._val_on_epoch(epoch,net,loss,val_loader, activation=activation)

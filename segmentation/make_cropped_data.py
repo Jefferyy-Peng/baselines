@@ -5,12 +5,15 @@ from collections import OrderedDict
 import SimpleITK as sitk
 import pandas as pd
 import torch
+from PIL import Image
 from torchvision import transforms
 from tqdm import tqdm
 import numpy as np
 import h5py
 import random
+import cv2
 
+from utils import add_contour
 
 
 def save_as_hdf5(data, save_path, key):
@@ -61,7 +64,9 @@ def crop_with_margin(image, seg, mask, margin):
     cropped_image = image[:, min_row:max_row + 1, min_col:max_col + 1]
     cropped_seg = seg[min_row:max_row + 1, min_col:max_col + 1]
 
-    return cropped_image, cropped_seg
+    new_image = image.copy()
+
+    return cropped_image, cropped_seg, new_image, seg, mask, min_row, min_col, max_row, max_col
 
 def store_images_labels_2d(save_path, patient_id, cts, labels):
     for i in range(labels.shape[0]):
@@ -179,14 +184,31 @@ def make_segdata(base_dir, label_dir, output_dir):
             if pred_gland.max() == 0:
                 continue
             else:
-                cropped_img, cropped_seg = crop_with_margin(slice_imgs[id].squeeze(0).detach().cpu().numpy(), slice_segs[id].squeeze(0).squeeze(0).numpy(), pred_gland.detach().cpu().numpy(), 5)
+                cropped_img, cropped_seg, orig_image, seg, gland_mask, min_row, min_col, max_row, max_col = crop_with_margin(slice_imgs[id].squeeze(0).detach().cpu().numpy(), slice_segs[id].squeeze(0).squeeze(0).numpy(), pred_gland.detach().cpu().numpy(), 5)
+
+                # orig_image = np.repeat(np.expand_dims((orig_image*255).astype(np.uint8).transpose(1,2,0)[..., 0], axis=-1), 3, axis=-1)
+                # cv2.rectangle(orig_image, (min_col, min_row), (max_col, max_row), (0, 255, 0), 2)
+                #
+                # processed_image = add_contour(orig_image, seg, np.array([240, 128, 128, 0.9]))
+                # # processed_image = add_contour(processed_image, gland_mask, np.array([221, 160, 221, 0.5]))
+                # gland_mask_uint8 = (gland_mask * 255).astype(np.uint8)
+                # gland_contours, _ = cv2.findContours(gland_mask_uint8, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                # cv2.drawContours(processed_image, gland_contours, -1, np.array([221, 160, 221, 0.5]), 5)
+                # processed_image = Image.fromarray(processed_image)
+                # cropped_image = add_contour(np.repeat(np.expand_dims(cropped_img.transpose(1,2,0)[..., 0], axis=-1), 3, axis=-1), cropped_seg, np.array([240, 128, 128, 0.9]))
+                # cropped_image = (cropped_image * 255).astype(np.uint8)
+                # cropped_image = Image.fromarray(cropped_image)
+                # os.makedirs(data_dir_2d + '_viz',exist_ok=True)
+                # processed_image.save(os.path.join(data_dir_2d + '_viz', '%s_%d_orig.png' % (count, id)))
+                # cropped_image.save(os.path.join(data_dir_2d + '_viz', '%s_%d_crop.png' % (count, id)))
+
                 hdf5_file = h5py.File(os.path.join(data_dir_2d, '%s_%d.hdf5' % (count, id)), 'w')
                 hdf5_file.create_dataset('ct', data=cropped_img.astype(np.float32))
                 hdf5_file.create_dataset('seg', data=cropped_seg.astype(np.uint8))
                 hdf5_file.close()
 
         # count -> path for lesion, path -> count for gland and zone
-        pid_dict[path] = count
+        pid_dict[count] = path
 
         count += 1
 
