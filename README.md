@@ -1,8 +1,25 @@
 # Brain MRI segmentation Training and Inference pipeline
 
 This repo include the training and evaluation code for the internship project at CHDI which is called  Multi-contrasts MRI Auto Segmentation for Huntington Disease.
+Training data: 
+
 The training pipeline is shown below:
 
+Offline Preprocessing: 
+* Normalize to range (0,1)
+* Resize to (1024, 1024)
+Online Data Augmentation:
+* random rotation
+* random flip
+* online upsampling for tail classes
+  * With probability a, sample an image from set {no seg}
+  * With probability (1-a), sample an image from set {have seg}
+Neural Network:
+* 2D/3D UNet
+Post Processing:
+* Erode
+* Dilate
+* Resize back to original dimension (512, 512)
 
 ## Training Instruction
 
@@ -27,6 +44,10 @@ In `config.py`, set parameters:
 * `VERSION`: will be the name of the log path and ckpt path
 * `PATH_DIR`: Set to the 'data_2d' directory in the dataset path
 * `activation`: Set to 'False' if the Network output already go through activation
+
+Then run the script `brain_segmentation/run.py`
+`cd brain_segmentation`
+`python run.py`
  
 Then the classification network and segmentation network are trained respectively. The classification network is EfficientNet-b5, while the segmentation network is ITUNet.
 Please note that in the process of generating pseudo labels, the classification network is needed to assist ITUNet to predict. 
