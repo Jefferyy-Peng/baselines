@@ -1,8 +1,32 @@
-# ITUNet-for-PICAI-2022-Challenge
+# Brain MRI segmentation Training and Inference pipeline
 
-This is the method used by Swangeese Team in PICAI2022 challenge.
+This repo include the training and evaluation code for the internship project at CHDI which is called  Multi-contrasts MRI Auto Segmentation for Huntington Disease.
+The training pipeline is shown below:
 
-This method first uses preprocess to complete the data preprocessing, and the tools are mainly official tools, provided by Saha et al. 
+
+## Training Instruction
+
+### install dependencies
+
+do `cd brain_segmentation` then `pip install -r requirements.txt`
+
+### Dataset preprocess
+
+Go to `make_dataset.py`, set parameters:
+
+* `base_dir`: Set to the root path of your dicom dataset. 
+* `output_path`: Set to the path you want to store the generated dataset
+* `phase`:  Set to 'seg'
+
+This script will convert four contrast, PSIR, T1W, T2W FLARE, R2 Map to a single hdf5 file.
+
+### Configuration
+
+In `config.py`, set parameters:
+
+* `VERSION`: will be the name of the log path and ckpt path
+* `PATH_DIR`: Set to the 'data_2d' directory in the dataset path
+* `activation`: Set to 'False' if the Network output already go through activation
  
 Then the classification network and segmentation network are trained respectively. The classification network is EfficientNet-b5, while the segmentation network is ITUNet.
 Please note that in the process of generating pseudo labels, the classification network is needed to assist ITUNet to predict. 
