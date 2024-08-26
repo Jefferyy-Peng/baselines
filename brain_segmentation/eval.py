@@ -11,6 +11,7 @@ from monai.transforms import Resize
 import matplotlib.patches as mpatches
 
 import torch.nn as nn
+import nibabel as nib
 
 from typing import (Callable, Dict, Hashable, Iterable, List, Optional, Sized,
                     Tuple, Union)
@@ -32,7 +33,7 @@ from report_guided_annotation import extract_lesion_candidates
 
 from brain_segmentation.utils import dice_score_per_class, dice_score_per_class_3d
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
-                         RandomRotate2D, To_Tensor, DataGenerator3D)
+                         RandomRotate2D, To_Tensor, DataGenerator3D, DataGenerator3DEval)
 from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from segmentation.config import FOLD_NUM, CURRENT_FOLD
 from segmentation.model_single import ModelEmb, SegDecoderCNN
@@ -189,7 +190,7 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     ax = axes[1]
     ax.legend(handles=patches, loc='best', title='Legend')
     ax.imshow(img2D, cmap='gray')
-    ax.imshow(prev_masks, cmap=cmap, norm=norm, alpha=0.15, interpolation='none')
+    ax.imshow(prev_masks, cmap=cmap, norm=norm, alpha=0.8, interpolation='none')
     ax.set_title(f'Predict Mask')
     ax.axis('off')
 
@@ -197,7 +198,7 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     ax = axes[2]
     ax.legend(handles=patches, loc='best', title='Legend')
     ax.imshow(img2D, cmap='gray')
-    ax.imshow(gt2D, cmap=cmap, norm=norm, alpha=0.15, interpolation='none')
+    ax.imshow(gt2D, cmap=cmap, norm=norm, alpha=0.8, interpolation='none')
     ax.set_title(f'Ground Truth')
     ax.axis('off')
 
@@ -558,6 +559,7 @@ def plot_all(net, train_path, val_path, ckpt_path, log_dir, device):
             plot_segmentation2D(data[0,0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy(), output.squeeze(0).detach().cpu(),
                                 targets.squeeze(0).detach().cpu().numpy(), log_dir,
                                 f'{data_path[0].split("/")[-1].split(".")[0]}', image_dice=None)
+
     with torch.no_grad():
         for step, (sample, data_path) in enumerate(tqdm(val_loader)):
             data = sample['ct']
@@ -620,7 +622,7 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
     val_transformer = transforms.Compose(
         [Normalize_2d(), To_Tensor()])
 
-    val_dataset = DataGenerator3D(val_path, transform=val_transformer)
+    val_dataset = DataGenerator3DEval(val_path, transform=val_transformer, mode='val')
 
     val_loader = DataLoader(
         val_dataset,
@@ -636,80 +638,97 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
     dense_embeddings = []
     image_targets = []
     dices = []
+    os.makedirs(os.path.join(log_dir, 'pred'), exist_ok=True)
     with torch.no_grad():
-        for step, sample in enumerate(tqdm(val_loader)):
+        for step, (sample, path) in enumerate(tqdm(val_loader)):
             data = sample['ct']
             target = sample['seg']
 
             data = data.squeeze().transpose(1, 0)
             data = data.to(device)
             target = target.to(device)
-            if mode == 'normal':
-                output = net(data)
-            elif mode == 'viz_representation':
-                output, image_embedding, dense_embedding = net(data)
-                image_embeddings.append(
-                    torch.mean(image_embedding.reshape(image_embedding.shape[0], image_embedding.shape[1], -1), dim=2))
-                dense_embeddings.append(
-                    torch.mean(dense_embedding.reshape(dense_embedding.shape[0], dense_embedding.shape[1], -1), dim=2))
-                image_targets.append(torch.Tensor([this_target.max() > 0 for this_target in target.squeeze(0)]))
-            if isinstance(output, tuple):
-                output = output[0]
 
-            output = output.float()
-            if activation:
-                output = torch.sigmoid(output)  # N*H*W
-            output = output.detach().cpu()
-            # lesion_output = torch.from_numpy(np.array([revert_transform(slice) for slice in lesion_output])).squeeze(1)
-            target = target.detach().cpu()
-            target = target[0]
-            # target = torch.from_numpy(np.array([seg_transform(slice) for slice in target])).squeeze(1)
-            # if plot:
-            #     for
-            #     plot_segmentation2D()
-            dices.append(compute_dice(torch.softmax(output, dim=1).detach(), target))
+            logits = torch.softmax(net(data), dim=1)
+            output = torch.argmax(logits, dim=1)
+
+            seg_transform = transforms.Resize(size=(512, 512),
+                                              interpolation=transforms.functional.InterpolationMode.NEAREST)
+
+            output = seg_transform(output).detach().cpu().numpy().astype(np.int16).transpose(2,1,0)
+
+            affine = np.eye(4)  # This is an identity matrix, i.e., no rotation, no translation, etc.
+            nifti_img = nib.Nifti1Image(output, affine)
+
+            file_name = path[0].split('/')[-1].split('.')[0]
+
+            # Save the NIfTI image
+            nib.save(nifti_img, os.path.join(log_dir, 'pred', f'{file_name}_seg.nii.gz'))
+            # if mode == 'normal':
+            #     output = net(data)
+            # elif mode == 'viz_representation':
+            #     output, image_embedding, dense_embedding = net(data)
+            #     image_embeddings.append(
+            #         torch.mean(image_embedding.reshape(image_embedding.shape[0], image_embedding.shape[1], -1), dim=2))
+            #     dense_embeddings.append(
+            #         torch.mean(dense_embedding.reshape(dense_embedding.shape[0], dense_embedding.shape[1], -1), dim=2))
+            #     image_targets.append(torch.Tensor([this_target.max() > 0 for this_target in target.squeeze(0)]))
+            # if isinstance(output, tuple):
+            #     output = output[0]
+            #
+            # output = output.float()
+            # if activation:
+            #     output = torch.sigmoid(output)  # N*H*W
+            # output = output.detach().cpu()
+            # # lesion_output = torch.from_numpy(np.array([revert_transform(slice) for slice in lesion_output])).squeeze(1)
+            # target = target.detach().cpu()
+            # target = target[0]
+            # # target = torch.from_numpy(np.array([seg_transform(slice) for slice in target])).squeeze(1)
+            # # if plot:
+            # #     for
+            # #     plot_segmentation2D()
+            # dices.append(compute_dice(torch.softmax(output, dim=1).detach(), target))
 
 
             # lesion_results = compute_results_detect(lesion_output.numpy(), target.numpy(),
             #                                         lesion_results)
             # if step > 2:
             #     break
-
-    if mode == 'viz_representation':
-        image_embeddings = torch.cat(image_embeddings)
-        dense_embeddings = torch.cat(dense_embeddings)
-        image_targets = torch.cat(image_targets)
-        image_embeddings_2d = image_tsne.fit_transform(image_embeddings.detach().cpu().numpy())
-        dense_embeddings_2d = dense_tsne.fit_transform(dense_embeddings.detach().cpu().numpy())
-
-        fig, axes = plt.subplots(1, 2, figsize=(20, 8))
-
-        # Plot Embeddings1
-        axes[0].scatter(image_embeddings_2d[image_targets == 0, 0], image_embeddings_2d[image_targets == 0, 1], label='no lesion present', alpha=0.6)
-        axes[0].scatter(image_embeddings_2d[image_targets == 1, 0], image_embeddings_2d[image_targets == 1, 1], label='lesion present', alpha=0.6)
-        axes[0].set_title('2D Visualization of Image Embeddings')
-        axes[0].set_xlabel('TSNE Component 1')
-        axes[0].set_ylabel('TSNE Component 2')
-
-        # Plot Embeddings2
-        axes[1].scatter(dense_embeddings_2d[image_targets == 0, 0], dense_embeddings_2d[image_targets == 0, 1],
-                        label='no lesion present', alpha=0.6)
-        axes[1].scatter(dense_embeddings_2d[image_targets == 1, 0], dense_embeddings_2d[image_targets == 1, 1],
-                        label='lesion present', alpha=0.6)
-        axes[1].set_title('2D Visualization of Dense Embeddings')
-        axes[1].set_xlabel('TSNE Component 1')
-        axes[1].set_ylabel('TSNE Component 2')
-
-        # Show the plot
-        plt.tight_layout()
-        plt.savefig(os.path.join(log_dir, f'{mode}.png'))
-
-    dices = torch.stack(dices)
-    mean_dice = torch.mean(dices, dim=0)
-    print(f'caudate dice: {mean_dice[1]}, globus dice: {mean_dice[2]}, putamen dice: {mean_dice[3]}')
-    os.system(f'cd {log_dir}')
-    os.system(f'touch result.txt')
-    os.system(f'echo "caudate dice: {mean_dice[1]}, globus dice: {mean_dice[2]}, putamen dice: {mean_dice[3]}" >> result.txt')
+    #
+    # if mode == 'viz_representation':
+    #     image_embeddings = torch.cat(image_embeddings)
+    #     dense_embeddings = torch.cat(dense_embeddings)
+    #     image_targets = torch.cat(image_targets)
+    #     image_embeddings_2d = image_tsne.fit_transform(image_embeddings.detach().cpu().numpy())
+    #     dense_embeddings_2d = dense_tsne.fit_transform(dense_embeddings.detach().cpu().numpy())
+    #
+    #     fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+    #
+    #     # Plot Embeddings1
+    #     axes[0].scatter(image_embeddings_2d[image_targets == 0, 0], image_embeddings_2d[image_targets == 0, 1], label='no lesion present', alpha=0.6)
+    #     axes[0].scatter(image_embeddings_2d[image_targets == 1, 0], image_embeddings_2d[image_targets == 1, 1], label='lesion present', alpha=0.6)
+    #     axes[0].set_title('2D Visualization of Image Embeddings')
+    #     axes[0].set_xlabel('TSNE Component 1')
+    #     axes[0].set_ylabel('TSNE Component 2')
+    #
+    #     # Plot Embeddings2
+    #     axes[1].scatter(dense_embeddings_2d[image_targets == 0, 0], dense_embeddings_2d[image_targets == 0, 1],
+    #                     label='no lesion present', alpha=0.6)
+    #     axes[1].scatter(dense_embeddings_2d[image_targets == 1, 0], dense_embeddings_2d[image_targets == 1, 1],
+    #                     label='lesion present', alpha=0.6)
+    #     axes[1].set_title('2D Visualization of Dense Embeddings')
+    #     axes[1].set_xlabel('TSNE Component 1')
+    #     axes[1].set_ylabel('TSNE Component 2')
+    #
+    #     # Show the plot
+    #     plt.tight_layout()
+    #     plt.savefig(os.path.join(log_dir, f'{mode}.png'))
+    #
+    # dices = torch.stack(dices)
+    # mean_dice = torch.mean(dices, dim=0)
+    # print(f'caudate dice: {mean_dice[1]}, globus dice: {mean_dice[2]}, putamen dice: {mean_dice[3]}')
+    # os.system(f'cd {log_dir}')
+    # os.system(f'touch result.txt')
+    # os.system(f'echo "caudate dice: {mean_dice[1]}, globus dice: {mean_dice[2]}, putamen dice: {mean_dice[3]}" >> result.txt')
 
 
 
@@ -777,4 +796,5 @@ if __name__ == '__main__':
     elif PHASE == 'detect':
         plot_eval_detect(net, val_AP, ckpt_path, log_dir, 'cuda', activation, mode)
     elif PHASE == 'plot_all':
-        plot_all(net, train_path, val_path, ckpt_path, log_dir, 'cuda:0')
+        plot_all(net,
+                 train_path, val_path, ckpt_path, log_dir, 'cuda:0')
