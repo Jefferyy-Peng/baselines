@@ -16,7 +16,38 @@ from pydensecrf.utils import compute_unary, create_pairwise_bilateral,\
          create_pairwise_gaussian, softmax_to_unary, unary_from_softmax
 
 from eval_utils import extract_lesion_candidates
+from scipy.spatial.distance import cdist
 
+
+def calculate_max_tumor_distance(mask, spacing):
+    """
+    Calculate the maximum Euclidean distance between tumor voxels in a 3D MRI mask.
+
+    Parameters:
+    - mask (np.ndarray): 3D binary mask where tumor voxels are labeled as 1.
+    - spacing (list or tuple): The voxel spacing for the z, y, and x axes in mm, e.g., [3.0, 0.5, 0.5].
+
+    Returns:
+    - max_distance (float): The maximum Euclidean distance between any two tumor voxels in mm.
+    """
+
+    # Find the coordinates of all tumor voxels (where mask == 1)
+    tumor_voxel_coords = np.argwhere(mask == 1)
+
+    # If no tumor is found, return zero
+    if len(tumor_voxel_coords) == 0:
+        return 0
+
+    # Convert voxel coordinates to real-world coordinates by applying the spacing
+    real_world_coords = np.multiply(tumor_voxel_coords, spacing)
+
+    # Calculate the pairwise Euclidean distances between all tumor voxels
+    distances = cdist(real_world_coords, real_world_coords, metric='euclidean')
+
+    # Find and return the maximum distance
+    max_distance = np.max(distances)
+
+    return max_distance
 
 def get_crf_img(inputs, outputs):
     for i in range(outputs.shape[0]):
@@ -135,7 +166,7 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
 def compute_results_detect(logits, target, gland_output, results):
     preds = []
     logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits
-    preds.append(extract_lesion_candidates(logits, gland_output, threshold=0.5)[0])
+    preds.append(extract_lesion_candidates(logits, gland_output, threshold=0.75)[0])
     for y_det, y_true in zip(preds,
                              [target]):
         y_list, *_ = evaluate_case(

@@ -6,7 +6,7 @@ import torch.nn.functional as F
 class FocalLoss(nn.Module):
     """Focal loss function for binary segmentation."""
 
-    def __init__(self, alpha=0.6, gamma=2, num_classes=2, activation=True, reduction="mean"):
+    def __init__(self, alpha=0.8, gamma=2, num_classes=2, activation=True, reduction="mean"):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -78,8 +78,10 @@ class Deep_Supervised_Loss(nn.Module):
         self.mode = mode
     def forward(self, input, target):
         if self.mode == 'FocalDice':
+            self.fl.reduction = 'mean'
             return self.dl(input, target) + self.fl(input, target)
         elif self.mode == 'Focal':
+            self.fl.reduction = 'sum'
             return self.fl(input, target)
         else:
             raise NotImplementedError

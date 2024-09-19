@@ -197,9 +197,9 @@ def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
 
 if __name__ == "__main__":
     phase = 'seg'
-    base_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
-    label_dir = '../output_gland_AI/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
-    output_dir = './dataset/gland_segdata'
+    base_dir = '../output_lesion_combined/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
+    label_dir = '../output_lesion_combined/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
+    output_dir = './dataset/lesion_segdata_combined'
     test_dir = 'path/to/nnUNet_test_data'
     seg_dir = 'path/to/segmentation_result'
     csv_path = 'path/to/classification_result'

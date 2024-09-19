@@ -123,7 +123,7 @@ class SemanticSeg(object):
                 prompt_encoder=sam_model.prompt_encoder,
                 dense_encoder=dense_model,
                 image_size=512
-            ), device_ids=[0, 1, 2, 3, 4, 5,6,7])
+            ), device_ids=[0, 1, 2, 3, 4, 5])
 
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
         #
@@ -222,7 +222,7 @@ class SemanticSeg(object):
 
         net = self.net
         lr = self.lr
-        loss = Deep_Supervised_Loss(mode='FocalDice', activation=activation)
+        loss = Deep_Supervised_Loss(mode='Focal', activation=activation)
 
         if len(self.device.split(',')) > 1:
             net = DataParallel(net)

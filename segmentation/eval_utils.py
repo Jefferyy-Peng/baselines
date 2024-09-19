@@ -81,7 +81,8 @@ def extract_lesion_candidates_dynamic(
     dynamic_threshold_factor: float = 2.5,
     max_prob_round_decimals: Optional[int] = None,
     remove_adjacent_lesion_candidates: bool = True,
-    max_prob_failsafe_stopping_threshold: float = 0.01
+    max_prob_failsafe_stopping_threshold: float = 0.01,
+    gland_output=None
 ) -> "Tuple[npt.NDArray[np.float_], List[Tuple[int, float]], npt.NDArray[np.int_]]":
     """
     Generate detection proposals using a dynamic threshold to determine the location and size of lesions.
@@ -108,7 +109,8 @@ def extract_lesion_candidates_dynamic(
             softmax=working_softmax,
             threshold=threshold,
             min_voxels_detection=min_voxels_detection,
-            max_prob_round_decimals=max_prob_round_decimals
+            max_prob_round_decimals=max_prob_round_decimals,
+            gland_output=gland_output
         )
 
         # select blob with max. confidence
@@ -203,7 +205,8 @@ def extract_lesion_candidates(
             num_lesions_to_extract=num_lesions_to_extract,
             remove_adjacent_lesion_candidates=remove_adjacent_lesion_candidates,
             min_voxels_detection=min_voxels_detection,
-            max_prob_round_decimals=max_prob_round_decimals
+            max_prob_round_decimals=max_prob_round_decimals,
+            gland_output=gland_output
         )
     elif threshold == 'dynamic-fast':
         # determine max. softmax and set a per-case 'static' threshold based on that

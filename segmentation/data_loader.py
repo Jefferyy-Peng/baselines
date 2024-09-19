@@ -184,10 +184,11 @@ class DataGenerator(Dataset):
     - transform: the data augmentation methods
     '''
 
-    def __init__(self, path_list, num_class=2, transform=None):
+    def __init__(self, path_list, num_class=2, transform=None, mode='train'):
         self.path_list = path_list
         self.num_class = num_class
         self.transform = transform
+        self.mode=mode
 
     def __len__(self):
         return len(self.path_list)
@@ -204,8 +205,43 @@ class DataGenerator(Dataset):
         # Transform
         if self.transform is not None:
             sample = self.transform(sample)
+        if self.mode == 'train':
+            return sample
+        else:
+            return sample, self.path_list[index]
 
-        return sample
+
+class DataGenerator_no_resize(Dataset):
+    '''
+    Custom Dataset class for data loader.
+    Args：
+    - path_list: list of file path
+    - roi_number: integer or None, to extract the corresponding label
+    - num_class: the number of classes of the label
+    - transform: the data augmentation methods
+    '''
+
+    def __init__(self, path_list, num_class=2, transform=None, mode='train'):
+        self.path_list = path_list
+        self.num_class = num_class
+        self.transform = transform
+        self.mode=mode
+
+    def __len__(self):
+        return len(self.path_list)
+
+    def __getitem__(self, index):
+        ct = torch.Tensor(hdf5_reader(self.path_list[index], 'ct')).numpy()
+        seg = torch.Tensor(hdf5_reader(self.path_list[index], 'seg')).numpy()
+
+        sample = {'ct': ct, 'seg': seg}
+        # Transform
+        if self.transform is not None:
+            sample = self.transform(sample)
+        if self.mode == 'train':
+            return sample
+        else:
+            return sample, self.path_list[index]
 
 
 def create_binary_masks(mask):
@@ -316,7 +352,7 @@ class MultiLevelDataGenerator(Dataset):
                 ct = torch.Tensor(hdf5_reader(path, 'ct'))
                 lesion_seg = torch.Tensor(hdf5_reader(path, 'seg'))
         else:
-            if np.random.choice(2, 1, p=[1-0.4, 0.4]) == 0:
+            if np.random.choice(2, 1, p=[1-0.5, 0.5]) == 0:
                 index = index % len(self.path_list1)
                 #index = np.random.randint(len(self.img_path1))
                 path = self.path_list1[index]
