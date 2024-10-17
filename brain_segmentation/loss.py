@@ -6,6 +6,39 @@ from torch import Tensor
 
 from utils import one_hot_encode
 
+class BinaryFocalLoss(nn.Module):
+    """Focal loss function for binary segmentation."""
+
+    def __init__(self, alpha=0.5, gamma=1, num_classes=2, activation=True, reduction="sum"):
+        super(BinaryFocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.num_classes = num_classes
+        self.reduction = reduction
+        self.activation = activation
+
+    def forward(self, inputs, targets):
+        if self.activation:
+            inputs = torch.sigmoid(inputs)
+        # ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
+        #
+        # pt = torch.exp(-ce_loss)
+        # loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
+        p_t = (inputs * targets) + ((1 - inputs) * (1 - targets))
+        loss = ce_loss * ((1 - p_t) ** self.gamma)
+
+        if self.alpha >= 0:
+            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+            loss = alpha_t * loss
+
+        if self.reduction == "mean":
+            loss = loss.mean()
+        elif self.reduction == "sum":
+            loss = loss.sum()
+
+        return loss
 
 class FocalLoss(nn.Module):
     """ Focal Loss, as described in https://arxiv.org/abs/1708.02002.
@@ -125,6 +158,22 @@ class DiceLoss(nn.Module):
         # Compute the Dice loss for each class
         dice_loss = 1.0 - dice_coeff
         return torch.mean(dice_loss)
+
+class Binary_Deep_Supervised_Loss(nn.Module):
+    def __init__(self, mode='FocalDice', activation=True):
+        super(Binary_Deep_Supervised_Loss, self).__init__()
+        self.fl = BinaryFocalLoss(reduction='sum', activation=activation)
+        self.dl = DiceLoss(activation=activation)
+        self.mode = mode
+    def forward(self, input, target):
+        if self.mode == 'FocalDice':
+            return self.dl(input, target) + self.fl(input, target)
+        elif self.mode == 'Focal':
+            return self.fl(input, target)
+        elif self.mode == 'Dice':
+            return self.dl(input, target)
+        else:
+            raise NotImplementedError
 
 class Deep_Supervised_Loss(nn.Module):
     def __init__(self, mode='FocalDice', activation=True):

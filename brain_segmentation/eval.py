@@ -31,7 +31,8 @@ from tqdm import tqdm
 import cv2
 from report_guided_annotation import extract_lesion_candidates
 
-from brain_segmentation.utils import dice_score_per_class, dice_score_per_class_3d
+from brain_segmentation.utils import dice_score_per_class, dice_score_per_class_3d, search_ckpt_path, dice_score_binary, \
+    one_hot_encode
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, DataGenerator3D, DataGenerator3DEval)
 from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN
@@ -261,20 +262,6 @@ def plot_eval(net, val_path, ckpt_path, log_dir, device):
             plot_segmentation2D(data.squeeze(0).permute(1, 2, 0).detach().cpu(), output.squeeze(0)[0].detach().cpu(), target.squeeze(0)[0].detach().cpu(), plot_path, count)
             count += 1
 
-def compute_dice(predict, target):
-    """
-    Compute dice
-    Args:
-        predict: A tensor of shape [N, C, *]
-        target: A tensor of same shape with predict
-        ignore_index: class index to ignore
-    Return:
-        mean dice over the batch
-    """
-    target = target.long().detach().cpu()
-    scores = dice_score_per_class_3d(predict.detach().cpu(), target, num_classes=4)
-    return scores
-
 def add_contour(original_image, mask_lesion, mask_pz, mask_cz, mask_gland, random_color=False, contour_thickness=7,):
     color1 = np.array([240, 128, 128, 0.9])  # Red
     color2 = np.array([144, 238, 144, 0.9])  # Green
@@ -396,26 +383,6 @@ def plot_segmentation3D_lesion(img3D, lesion_prev_masks, lesion_gt3D, lesion_ap,
 
     return lesion_dice
 
-def search_ckpt_path(ckpt_path):
-    epoch_pattern = re.compile(r'epoch:(\d+)-')
-
-    # Initialize variables to keep track of the largest epoch and the corresponding file
-    largest_epoch = -1
-    ckpt_file = None
-
-    # Iterate over all files in the directory
-    for filename in os.listdir(ckpt_path):
-        # Match the pattern to find the epoch number
-        match = epoch_pattern.search(filename)
-        if match:
-            epoch = int(match.group(1))
-            # Update the largest epoch and file if the current epoch is larger
-            if epoch > largest_epoch:
-                largest_epoch = epoch
-                ckpt_file = filename
-
-    return ckpt_file
-
 def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
 
@@ -488,7 +455,7 @@ def plot_eval_multi_level(net, val_path, ckpt_path, log_dir, device, activation)
     # os.system(f'touch result.txt')
     # os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
 
-def plot_all(net, train_path, val_path, ckpt_path, log_dir, device):
+def plot_all(net, train_path, val_path, ckpt_path, log_dir, device, pred_mode='multi-class'):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
 
     state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
@@ -540,8 +507,16 @@ def plot_all(net, train_path, val_path, ckpt_path, log_dir, device):
             data = data.to(device)
 
             with autocast(False):
-                logits = torch.softmax(net(data), dim=1)
-                output = torch.argmax(logits, dim=1)
+                if pred_mode == 'multi-class':
+                    logits = torch.softmax(net(data), dim=1)
+                    output = torch.argmax(logits, dim=1)
+                else:
+                    logits = torch.sigmoid(net(data))
+                    output_3_channel = (logits > 0.5).squeeze(0)
+                    output = torch.zeros_like(targets, dtype=torch.long).squeeze(0)
+                    output[output_3_channel[0] == 1] = 1
+                    output[(output_3_channel[1] == 1) & (output == 0)] = 2
+                    output[(output_3_channel[2] == 1) & (output == 0)] = 3
                 # if isinstance(output, tuple):
                 #     output = output[0]
             # multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
@@ -567,8 +542,16 @@ def plot_all(net, train_path, val_path, ckpt_path, log_dir, device):
             data = data.to(device)
 
             with autocast(False):
-                logits = torch.softmax(net(data), dim=1)
-                output = torch.argmax(logits, dim=1)
+                if pred_mode == 'multi-class':
+                    logits = torch.softmax(net(data), dim=1)
+                    output = torch.argmax(logits, dim=1)
+                else:
+                    logits = torch.sigmoid(net(data))
+                    output_3_channel = (logits > 0.5).squeeze(0)
+                    output = torch.zeros_like(targets, dtype=torch.long).squeeze(0)
+                    output[output_3_channel[0] == 1] = 1
+                    output[(output_3_channel[1] == 1) & (output == 0)] = 2
+                    output[(output_3_channel[2] == 1) & (output == 0)] = 3
                 # if isinstance(output, tuple):
                 #     output = output[0]
             # multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
@@ -587,7 +570,7 @@ def plot_all(net, train_path, val_path, ckpt_path, log_dir, device):
                                 targets.squeeze(0).detach().cpu().numpy(), log_dir,
                                 f'{data_path[0].split("/")[-1].split(".")[0]}', image_dice=None)
 
-def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode='normal',):
+def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode='normal', pred_mode='multi-class'):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
 
     image_tsne = TSNE(n_components=2, random_state=42)
@@ -637,7 +620,9 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
     image_embeddings = []
     dense_embeddings = []
     image_targets = []
-    dices = []
+    caudate_dices = []
+    putamen_dices = []
+    globus_dices = []
     os.makedirs(os.path.join(log_dir, 'pred'), exist_ok=True)
     with torch.no_grad():
         for step, (sample, path) in enumerate(tqdm(val_loader)):
@@ -647,9 +632,22 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
             data = data.squeeze().transpose(1, 0)
             data = data.to(device)
             target = target.to(device)
+            if pred_mode == 'multi-class':
+                logits = torch.softmax(net(data), dim=1)
+                output = torch.argmax(logits, dim=1)
+                dice = dice_score_per_class(logits.permute(1, 0, 2, 3).unsqueeze(0), target, 4)
+            else:
+                logits = torch.sigmoid(net(data)).permute(1, 0, 2, 3).unsqueeze(0)
+                output_3_channel = (logits > 0.5).squeeze(0)
+                output = torch.zeros_like(target, dtype=torch.long).squeeze(0)
+                output[output_3_channel[0] == 1] = 1
+                output[(output_3_channel[1] == 1) & (output == 0)] = 2
+                output[(output_3_channel[2] == 1) & (output == 0)] = 3
+                dice = dice_score_per_class(output.unsqueeze(0), target, 4, input_logit=False)
 
-            logits = torch.softmax(net(data), dim=1)
-            output = torch.argmax(logits, dim=1)
+            caudate_dices.append(dice[0, 1].item())
+            putamen_dices.append(dice[0, 3].item())
+            globus_dices.append(dice[0, 2].item())
 
             seg_transform = transforms.Resize(size=(512, 512),
                                               interpolation=transforms.functional.InterpolationMode.NEAREST)
@@ -693,6 +691,7 @@ def plot_eval_detect(net, val_path, ckpt_path, log_dir, device, activation, mode
             #                                         lesion_results)
             # if step > 2:
             #     break
+    print(f'mean 3d dice is caudate: {np.array(caudate_dices).mean()}, globus: {np.array(globus_dices).mean()}, putamen: {np.array(putamen_dices).mean()}')
     #
     # if mode == 'viz_representation':
     #     image_embeddings = torch.cat(image_embeddings)
@@ -749,30 +748,30 @@ if __name__ == '__main__':
 
     activation = False
 
-    net = UNet(in_channels=4, out_channels=4, init_features=32)
+    # net = UNet(in_channels=4, out_channels=4, init_features=32)
 
-    # sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
-    # dense_model = ModelEmb()
-    # multi_mask_decoder = MaskDecoder(
-    #     num_multimask_outputs=4,
-    #     transformer=TwoWayTransformer(
-    #         depth=2,
-    #         embedding_dim=256,
-    #         mlp_dim=2048,
-    #         num_heads=8,
-    #     ),
-    #     transformer_dim=256,
-    #     iou_head_depth=3,
-    #     iou_head_hidden_dim=256,
-    # )
-    # net = MedSAMAUTOMULTI(
-    #     image_encoder=sam_model.image_encoder,
-    #     mask_decoder=multi_mask_decoder,
-    #     prompt_encoder=sam_model.prompt_encoder,
-    #     dense_encoder=dense_model,
-    #     image_size=512,
-    #     mode=mode
-    # )
+    sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
+    dense_model = ModelEmb()
+    multi_mask_decoder = MaskDecoder(
+        num_multimask_outputs=3,
+        transformer=TwoWayTransformer(
+            depth=2,
+            embedding_dim=256,
+            mlp_dim=2048,
+            num_heads=8,
+        ),
+        transformer_dim=256,
+        iou_head_depth=3,
+        iou_head_hidden_dim=256,
+    )
+    net = MedSAMAUTOMULTI(
+        image_encoder=sam_model.image_encoder,
+        mask_decoder=multi_mask_decoder,
+        prompt_encoder=sam_model.prompt_encoder,
+        dense_encoder=dense_model,
+        image_size=512,
+        mode=mode
+    )
 
     # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
     #
@@ -785,16 +784,17 @@ if __name__ == '__main__':
     # )
 
     PHASE = 'plot_all'
+    pred_mode = 'binary'
 
-    # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAuto_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_ucsd_weighted_focal_lr_0.0001_weight_decay_0.001')
+    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg','MedSAMAUTO_binary_ucsd_100x_weighted_focal_slow_lr_decay_finetune_1x_lr_0.0001_weight_decay_0.001')
+    # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet2d_ucsd_1000x_weighted_focal_slow_lr_decay_finetune_1x_lr_0.0001_weight_decay_0.001')
 
-    # log_dir = './new_log/eval/MedSAM3LevelALLDataEqualRate'
-    log_dir = './new_log/eval/UNetWeightedFocal'
+    log_dir = './new_log/eval/MedSAMWeightedFocal100xFinetune1x'
+    # log_dir = 'new_log/eval/UNetWeightedFocal1000xWeightedFinetune1x'
     if PHASE == 'seg':
         plot_eval_multi_level(net, val_path, ckpt_path, log_dir, 'cuda:1', activation)
     elif PHASE == 'detect':
-        plot_eval_detect(net, val_AP, ckpt_path, log_dir, 'cuda', activation, mode)
+        plot_eval_detect(net, val_AP, ckpt_path, log_dir, 'cuda', activation, mode, pred_mode=pred_mode)
     elif PHASE == 'plot_all':
         plot_all(net,
-                 train_path, val_path, ckpt_path, log_dir, 'cuda:0')
+                 train_path, val_path, ckpt_path, log_dir, 'cuda:0', pred_mode=pred_mode)

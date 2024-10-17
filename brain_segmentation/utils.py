@@ -13,6 +13,27 @@ from report_guided_annotation import extract_lesion_candidates
 from skimage.metrics import hausdorff_distance
 import torch.nn.functional as F
 import matplotlib.patches as mpatches
+import re
+
+def search_ckpt_path(ckpt_path):
+    epoch_pattern = re.compile(r'epoch:(\d+)-')
+
+    # Initialize variables to keep track of the largest epoch and the corresponding file
+    largest_epoch = -1
+    ckpt_file = None
+
+    # Iterate over all files in the directory
+    for filename in os.listdir(ckpt_path):
+        # Match the pattern to find the epoch number
+        match = epoch_pattern.search(filename)
+        if match:
+            epoch = int(match.group(1))
+            # Update the largest epoch and file if the current epoch is larger
+            if epoch > largest_epoch:
+                largest_epoch = epoch
+                ckpt_file = filename
+
+    return ckpt_file
 
 
 def one_hot_encode(tensor, num_classes):
@@ -30,18 +51,20 @@ def one_hot_encode(tensor, num_classes):
         return F.one_hot(tensor, num_classes).permute(0, 4, 1, 2, 3).float()
 
 
-def dice_score_per_class(preds, targets, num_classes, smooth=1.0):
+def dice_score_per_class(preds, targets, num_classes, smooth=1.0, input_logit=True):
     """
     Compute the Dice score for each class.
 
-    :param preds: Predicted logits of shape (N, C, H, W).
-    :param targets: Ground truth labels of shape (N, H, W).
+    :param preds: Predicted logits of shape (N, C, H, W) or (N, C, H, W, D).
+    :param targets: Ground truth labels of shape (N, H, W) or (N, H, W, D).
     :param num_classes: Number of classes.
     :param smooth: Smoothing factor to avoid division by zero.
     :return: Tensor of Dice scores for each class.
     """
     # Convert predictions to class indices
-    preds = torch.argmax(preds, dim=1)
+    if input_logit:
+        preds = torch.argmax(preds, dim=1)
+    targets = targets.long()
 
     # One-hot encode the predictions and targets
     preds_one_hot = one_hot_encode(preds, num_classes)
@@ -54,6 +77,30 @@ def dice_score_per_class(preds, targets, num_classes, smooth=1.0):
     elif targets_one_hot.dim() == 5:
         intersection = (preds_one_hot * targets_one_hot).sum(dim=(-3, -2, -1))
         union = preds_one_hot.sum(dim=(-3, -2, -1)) + targets_one_hot.sum(dim=(-3, -2, -1))
+
+    # Compute the Dice score for each class
+    dice_scores = (2.0 * intersection + smooth) / (union + smooth)
+
+    return dice_scores
+
+def dice_score_binary(preds, targets, num_classes, smooth=1.0):
+    """
+    Compute the Dice score for each class.
+
+    :param preds: Predicted logits of shape (N, C, H, W) or (N, C, H, W, D).
+    :param targets: Ground truth labels of shape (N, H, W) or (N, H, W, D).
+    :param num_classes: Number of classes.
+    :param smooth: Smoothing factor to avoid division by zero.
+    :return: Tensor of Dice scores for each class.
+    """
+    # Convert predictions to class indices
+    preds = preds > 0.5
+    if targets.dim() == 4:
+        intersection = (preds * targets).sum(dim=(-2, -1))
+        union = preds.sum(dim=(-2, -1)) + targets.sum(dim=(-2, -1))
+    elif targets.dim() == 5:
+        intersection = (preds * targets).sum(dim=(-3, -2, -1))
+        union = preds.sum(dim=(-3, -2, -1)) + targets.sum(dim=(-3, -2, -1))
 
     # Compute the Dice score for each class
     dice_scores = (2.0 * intersection + smooth) / (union + smooth)

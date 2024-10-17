@@ -285,7 +285,8 @@ class DataGenerator3D(Dataset):
             monai.transforms.SpatialPad(spatial_size=(128,512,512), method='symmetric'),  # Pad if smaller than target size
             monai.transforms.CenterSpatialCrop(roi_size=(128,512,512))  # Crop to target size
         ])
-        ct = torch.stack([PSIR, T1W, T2W, R2])
+        # ct = torch.stack([PSIR, T1W, T2W, R2])
+        ct = torch.stack([PSIR, T1W, R2])
         ct = transform(ct).numpy()
         # seg_transform = monai.transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)
         # seg = seg_transform(seg).numpy()
@@ -330,7 +331,8 @@ class DataGenerator3DEval(Dataset):
         transform = transforms.Resize(size=(1024, 1024))
         seg_transform = transforms.Resize(size=(1024, 1024),
                                           interpolation=transforms.functional.InterpolationMode.NEAREST)
-        ct = torch.stack([PSIR, T1W, T2W, R2])
+        # ct = torch.stack([PSIR, T1W, T2W, R2])
+        ct = torch.stack([PSIR, T1W, R2])
         ct = transform(ct).numpy()
         # seg_transform = monai.transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)
         # seg = seg_transform(seg).numpy()
@@ -373,7 +375,8 @@ class DataGenerator(Dataset):
         R2 = torch.Tensor(hdf5_reader(self.path_list[index], 'R2'))
         seg = torch.Tensor(hdf5_reader(self.path_list[index], 'seg')).unsqueeze(0).permute(0, 2, 1)
         transform = transforms.Resize(size=(1024, 1024))
-        ct = torch.stack([PSIR, T1W, T2W, R2])
+        # ct = torch.stack([PSIR, T1W, T2W, R2])
+        ct = torch.stack([PSIR, T1W, R2])
         ct = transform(ct).numpy()
         seg_transform = transforms.Resize(size=(1024, 1024), interpolation=transforms.functional.InterpolationMode.NEAREST)
         seg = seg_transform(seg).squeeze(0).numpy()

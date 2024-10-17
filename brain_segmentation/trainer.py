@@ -11,6 +11,7 @@ from matplotlib import pyplot as plt
 from picai_eval import evaluate, Metrics
 from picai_eval.eval import evaluate_case
 from report_guided_annotation import extract_lesion_candidates
+from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from torch.utils.tensorboard import SummaryWriter
 from torch.cuda.amp import GradScaler
 from torch.cuda.amp import autocast as autocast
@@ -23,14 +24,16 @@ from collections import OrderedDict
 
 import torch.nn as nn
 
+from brain_segmentation.utils import search_ckpt_path, dice_score_binary
 from segment_anything import sam_model_registry
+from segmentation.segment_anything.modeling import MaskDecoder, TwoWayTransformer
 from model_single import ModelEmb, SegDecoderCNN
 from peft import get_peft_model, LoraConfig, TaskType
 from monai.transforms import RandRotate, RandFlip
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, RandomRotate3D, RandomFlip3D, DataGenerator3D)
-from loss import Deep_Supervised_Loss
+from loss import Deep_Supervised_Loss, Binary_Deep_Supervised_Loss
 from utils import plot_segmentation2D, transform_mask_to_single_channel, one_hot_encode, \
     dice_score_per_class, plot_segmentation3D
 from utils import dfs_remove_weight, poly_lr, compute_results_detect
@@ -182,14 +185,27 @@ class SemanticSeg(object):
         # using UNet need to disable all sigmoid activation function
         # self.net = DataParallel(UNet(in_channels=4, out_channels=4, init_features=32))
         # self.net = DataParallel(UNet2d(in_channels=4, out_channels=4, init_features=32), device_ids=[0,1,2,3,4,5, 6, 7])
-        self.net = UNet(spatial_dims=3,
-            in_channels=4,
-            out_channels=4,
-            strides=[(2, 2, 2), (1, 2, 2), (1, 2, 2), (1, 2, 2), (2, 2, 2)],
-            channels=[32, 64, 128, 256, 512, 1024])
+        # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_ucsd_weighted_focal_lr_0.0001_weight_decay_0.001')
+        # ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
+        #
+        # state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
 
+        # new_state_dict = OrderedDict()
+        # for k, v in state_dict.items():
+        #     name = k.replace('module.', '')  # remove `module.` prefix
+        #     new_state_dict[name] = v
 
-        # sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
+        # self.net.load_state_dict(state_dict)
+
+        # 3D UNet
+        # self.net = UNet(spatial_dims=3,
+        #     in_channels=4,
+        #     out_channels=4,
+        #     strides=[(2, 2, 2), (1, 2, 2), (1, 2, 2), (1, 2, 2), (2, 2, 2)],
+        #     channels=[32, 64, 128, 256, 512, 1024])
+
+        # 2d MedSAM
+        sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
 
         # # Create LoRA configuration
         # lora_config = LoraConfig(
@@ -203,27 +219,32 @@ class SemanticSeg(object):
         # # Apply LoRA to the image encoder
         # sam_model.image_encoder = get_peft_model(sam_model.image_encoder, lora_config)
 
-        # dense_model = ModelEmb()
-        # multi_mask_decoder = MaskDecoder(
-        #     num_multimask_outputs=4,
-        #     transformer=TwoWayTransformer(
-        #         depth=2,
-        #         embedding_dim=256,
-        #         mlp_dim=2048,
-        #         num_heads=8,
-        #     ),
-        #     transformer_dim=256,
-        #     iou_head_depth=3,
-        #     iou_head_hidden_dim=256,
-        # )
-        # self.net = DataParallel(MedSAMAUTOMULTI(
-        #         image_encoder=sam_model.image_encoder,
-        #         mask_decoder=multi_mask_decoder,
-        #         prompt_encoder=sam_model.prompt_encoder,
-        #         dense_encoder=dense_model,
-        #         image_size=512
-        #     ))
+        dense_model = ModelEmb()
+        multi_mask_decoder = MaskDecoder(
+            num_multimask_outputs=3,
+            transformer=TwoWayTransformer(
+                depth=2,
+                embedding_dim=256,
+                mlp_dim=2048,
+                num_heads=8,
+            ),
+            transformer_dim=256,
+            iou_head_depth=3,
+            iou_head_hidden_dim=256,
+        )
+        self.net = DataParallel(MedSAMAUTOMULTI(
+                image_encoder=sam_model.image_encoder,
+                mask_decoder=multi_mask_decoder,
+                prompt_encoder=sam_model.prompt_encoder,
+                dense_encoder=dense_model,
+                image_size=512
+            ))
 
+        ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'MedSAMAUTO_binary_ucsd_100x_weighted_focal_slow_lr_decay_lr_0.0001_weight_decay_0.001')
+        ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
+
+        state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
+        self.net.load_state_dict(state_dict)
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
         #
         # self.net = DataParallel(MedSAMAUTOCNN(
@@ -331,7 +352,10 @@ class SemanticSeg(object):
 
         net = self.net
         lr = self.lr
-        loss = Deep_Supervised_Loss(mode='Focal', activation=activation)
+        if isinstance(self.net.module, MedSAMAUTOMULTI):
+            loss = Binary_Deep_Supervised_Loss(mode='Focal', activation=activation)
+        else:
+            loss = Deep_Supervised_Loss(mode='Focal', activation=activation)
 
         if len(self.device.split(',')) > 1:
             net = DataParallel(net)
@@ -373,13 +397,13 @@ class SemanticSeg(object):
 
         scaler = GradScaler()
 
-        early_stopping = EarlyStopping(patience=50,verbose=True,monitor='val_score',op_type='max')
+        early_stopping = EarlyStopping(patience=200,verbose=True,monitor='val_score',op_type='max')
 
         epoch = self.start_epoch
         optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr = lr)
 
         while epoch < self.n_epoch:
-            train_loss,caudate_train_dice,putamen_train_dice,globus_train_dice = self._train_on_epoch(epoch,net,loss,optimizer,train_loader,scaler, activation=activation)
+            train_loss,caudate_train_dice,putamen_train_dice,globus_train_dice, mem, max_mem = self._train_on_epoch(epoch,net,loss,optimizer,train_loader,scaler, activation=activation)
             self.writer.add_scalar(
                 'data/train_loss', train_loss, epoch
             )
@@ -390,9 +414,15 @@ class SemanticSeg(object):
             self.writer.add_scalar(
                 'data/train_loss_epochs', train_loss, epoch
             )
+            self.writer.add_scalar(
+                'data/train_mem', mem, epoch
+            )
+            self.writer.add_scalar(
+                'data/train_max_mem', max_mem, epoch
+            )
 
             if phase == 'seg':
-                val_loss,caudate_val_dice,putamen_val_dice,globus_val_dice, caudate_positive_dice, putamen_positive_dice, globus_positive_dice = self._val_on_epoch(epoch,net,loss,val_loader, activation=activation)
+                val_loss,caudate_val_dice,putamen_val_dice,globus_val_dice, caudate_positive_dice, putamen_positive_dice, globus_positive_dice, mem, max_mem = self._val_on_epoch(epoch,net,loss,val_loader, activation=activation)
                 self.writer.add_scalar(
                     'data/eval_loss_epochs', val_loss, epoch
                 )
@@ -413,6 +443,12 @@ class SemanticSeg(object):
                 )
                 self.writer.add_scalar(
                     'data/eval_globus_positive_dice_epochs', globus_positive_dice, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_mem', mem, epoch
+                )
+                self.writer.add_scalar(
+                    'data/eval_max_mem', max_mem, epoch
                 )
 
                 score = (caudate_val_dice + putamen_val_dice + globus_val_dice) / 3
@@ -649,9 +685,6 @@ class SemanticSeg(object):
         putamen_train_dice = AverageMeter()
         globus_train_dice = AverageMeter()
 
-        from metrics import RunningDice
-        run_dice = RunningDice(labels=range(self.num_classes),ignore_label=-1)
-
         for step, sample in enumerate(tqdm(train_loader)):
             data = sample['ct']
             targets = sample['seg']
@@ -662,7 +695,9 @@ class SemanticSeg(object):
                 output = net(data)
                 if isinstance(output,tuple):
                     output = output[0]
-                loss = criterion(output, targets.long())
+                if isinstance(net.module, MedSAMAUTOMULTI):
+                    targets = one_hot_encode(targets.long(), num_classes=4)[:, 1:]
+                loss = criterion(output, targets.float() if isinstance(net.module, MedSAMAUTOMULTI) else targets.long())
                 # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1))
 
             if plot:
@@ -688,12 +723,15 @@ class SemanticSeg(object):
             loss = loss.float()
 
             # dice = compute_dice(output.detach(),multi_level_targets[:, -1].unsqueeze(1), activation=activation)
-            dice = compute_dice(torch.softmax(output, dim=1).detach(), targets, activation=activation)
+            if isinstance(net.module, MedSAMAUTOMULTI):
+                dice = compute_dice(torch.sigmoid(output), targets, activation=activation, mode='binary')
+            else:
+                dice = compute_dice(torch.softmax(output, dim=1), targets, activation=activation, mode='multiclass')
             average_dice = torch.mean(dice, dim=0)
             train_loss.update(loss.item(),data.size(0))
-            caudate_train_dice.update(average_dice[1],data.size(0))
-            putamen_train_dice.update(average_dice[3], data.size(0))
-            globus_train_dice.update(average_dice[2], data.size(0))
+            caudate_train_dice.update(average_dice[1] if not isinstance(net.module, MedSAMAUTOMULTI) else average_dice[0],data.size(0))
+            putamen_train_dice.update(average_dice[3] if not isinstance(net.module, MedSAMAUTOMULTI) else average_dice[2], data.size(0))
+            globus_train_dice.update(average_dice[2] if not isinstance(net.module, MedSAMAUTOMULTI) else average_dice[1], data.size(0))
             # lesion_train_dice.update(average_dice[0], data.size(0))
 
             # output = (torch.sigmoid(output) > 0.5).int().detach().cpu().numpy()  #N*H*W
@@ -715,8 +753,10 @@ class SemanticSeg(object):
                 # self.writer.add_scalar('data/lesion_train_dice', lesion_train_dice.avg, self.global_step)
 
             self.global_step += 1
-
-        return train_loss.avg,caudate_train_dice.avg,putamen_train_dice.avg,globus_train_dice.avg
+        # print(torch.cuda.memory_summary())
+        mem = torch.cuda.memory_allocated()
+        max_mem = torch.cuda.max_memory_allocated()
+        return train_loss.avg,caudate_train_dice.avg,putamen_train_dice.avg,globus_train_dice.avg, mem, max_mem
 
 
     def _val_on_epoch(self,epoch,net,criterion,val_loader,val_transformer=None, activation=True, plot=False):
@@ -727,7 +767,6 @@ class SemanticSeg(object):
         putamen_val_dice = AverageMeter()
         globus_val_dice = AverageMeter()
 
-        from metrics import RunningDice
         caudate_positive_dice = []
         putamen_positive_dice = []
         globus_positive_dice = []
@@ -753,55 +792,47 @@ class SemanticSeg(object):
                                             torch.argmax(torch.softmax(output[id, ...], dim=0), dim=0).detach().cpu(),
                                             targets[id, ...].detach().cpu().numpy(), f'./val_plot',
                                             f'{id}', image_dice=None)
-                loss = criterion(output, targets.long())
+                if isinstance(net.module, MedSAMAUTOMULTI):
+                    targets = one_hot_encode(targets.long(), num_classes=4)[:, 1:]
+                loss = criterion(output, targets.float() if isinstance(net.module, MedSAMAUTOMULTI) else targets.long())
 
                 output = output.float()
                 loss = loss.float()
 
-                # dice = compute_dice(output.detach(),multi_level_targets[:, -1].unsqueeze(1),activation=activation)
-                dice = compute_dice(torch.softmax(output, dim=1).detach(), targets, activation=activation)
+                if isinstance(net.module, MedSAMAUTOMULTI):
+                    dice = compute_dice(torch.sigmoid(output), targets, activation=activation, mode='binary')
+                else:
+                    dice = compute_dice(torch.softmax(output, dim=1), targets, activation=activation,
+                                        mode='multiclass')
                 average_dice = torch.mean(dice, dim=0)
-                for id, target in enumerate(targets):
-                    if 1 in torch.unique(target):
-                        caudate_positive_dice.append(dice[id, 1])
-                    if 3 in torch.unique(target):
-                        putamen_positive_dice.append(dice[id, 3])
-                    if 2 in torch.unique(target):
-                        globus_positive_dice.append(dice[id, 2])
+                if isinstance(net.module, MedSAMAUTOMULTI):
+                    for id, target in enumerate(targets):
+                        if 1 in torch.unique(target[0]):
+                            caudate_positive_dice.append(dice[id, 0])
+                        if 1 in torch.unique(target[2]):
+                            putamen_positive_dice.append(dice[id, 2])
+                        if 1 in torch.unique(target[1]):
+                            globus_positive_dice.append(dice[id, 1])
+                else:
+                    for id, target in enumerate(targets):
+                        if 1 in torch.unique(target):
+                            caudate_positive_dice.append(dice[id, 1])
+                        if 3 in torch.unique(target):
+                            putamen_positive_dice.append(dice[id, 3])
+                        if 2 in torch.unique(target):
+                            globus_positive_dice.append(dice[id, 2])
                 val_loss.update(loss.item(),data.size(0))
-                caudate_val_dice.update(average_dice[1], data.size(0))
-                putamen_val_dice.update(average_dice[3], data.size(0))
-                globus_val_dice.update(average_dice[2], data.size(0))
-                # lesion_val_dice.update(average_dice[0], data.size(0))
-
-                # if activation:
-                #     logits = torch.sigmoid(output)
-                # else:
-                #     logits = output
-                # output = (logits > 0.5).int().detach().cpu().numpy()  # N*H*W
-                # # target = target.detach().cpu().numpy()
-                # # run_dice.update_matrix(target,output)
-                #
-                # lesion_results = compute_results(logits[:, -1, :, :], lesion_target.detach().cpu().numpy(), lesion_results)
+                caudate_val_dice.update(average_dice[1] if not isinstance(net.module, MedSAMAUTOMULTI) else average_dice[0], data.size(0))
+                putamen_val_dice.update(average_dice[3] if not isinstance(net.module, MedSAMAUTOMULTI) else average_dice[2], data.size(0))
+                globus_val_dice.update(average_dice[2] if not isinstance(net.module, MedSAMAUTOMULTI) else average_dice[1], data.size(0))
 
                 torch.cuda.empty_cache()
 
                 if step % 1 == 0:
-                    # rundice, dice_list = run_dice.compute_dice()
-                    # print("Category Dice: ", dice_list)
                     print('Eval epoch:{}/{},step:{},val_loss:{:.5f},caudate_val_dice:{:.5f},putamen_val_dice:{:.5f},globus_val_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss.item(), caudate_val_dice.avg, putamen_val_dice.avg, globus_val_dice.avg))
-                    # run_dice.init_op()
-                    # self.writer.add_scalar(
-                    #     'data/eval_loss', loss.item(), self.global_step
-                    # )
-                    # self.writer.add_scalar('data/eval_dice', rundice, self.global_step)
-        # lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
-        # lesion_valid_metrics = Metrics(lesion_results)
-        # lesion_auc = lesion_valid_metrics.auroc
-        # lesion_ap = lesion_valid_metrics.AP
-
-        return val_loss.avg,caudate_val_dice.avg,putamen_val_dice.avg,globus_val_dice.avg, torch.mean(torch.stack(caudate_positive_dice)), torch.mean(torch.stack(putamen_positive_dice)), torch.mean(torch.stack(globus_positive_dice))
-
+        mem = torch.cuda.memory_allocated()
+        max_mem = torch.cuda.max_memory_allocated()
+        return val_loss.avg,caudate_val_dice.avg,putamen_val_dice.avg,globus_val_dice.avg, torch.mean(torch.stack(caudate_positive_dice)), torch.mean(torch.stack(putamen_positive_dice)), torch.mean(torch.stack(globus_positive_dice)), mem, max_mem
 
     def val(self,epoch, val_path,net = None,val_transformer=None,mode = 'val'):
         if net is None:
@@ -993,7 +1024,10 @@ def binary_dice(predict, target, smooth=1e-5):
 
     return dice
 
-def compute_dice(predict,target,ignore_index=0, activation=True):
-    target = target.long().detach().cpu()
-    scores = dice_score_per_class(predict.detach().cpu(), target, num_classes=4)
+def compute_dice(predict,target,ignore_index=0, activation=True, mode='multiclass'):
+    target = target.long()
+    if mode == 'binary':
+        scores = dice_score_binary(predict, target, num_classes=4)
+    else:
+        scores = dice_score_per_class(predict, target, num_classes=4)
     return scores
