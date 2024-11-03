@@ -17,6 +17,13 @@ from pydensecrf.utils import compute_unary, create_pairwise_bilateral,\
 
 from eval_utils import extract_lesion_candidates
 from scipy.spatial.distance import cdist
+from enum import Enum
+
+class ModelName(Enum):
+    medsam = 'MedSAMAuto'
+    swin_unetr = 'Swin-UNETR'
+    unet = 'UNet'
+    itunet = 'ITUNet'
 
 
 def calculate_max_tumor_distance(mask, spacing):
@@ -163,10 +170,10 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     plt.savefig(os.path.join(save_path, f'slice_{count}'))
     plt.close()
 
-def compute_results_detect(logits, target, gland_output, results):
+def compute_results_detect(logits, target, gland_output, results, threshold):
     preds = []
     logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits
-    preds.append(extract_lesion_candidates(logits, gland_output, threshold=0.75)[0])
+    preds.append(extract_lesion_candidates(logits, gland_output, threshold=threshold)[0])
     for y_det, y_true in zip(preds,
                              [target]):
         y_list, *_ = evaluate_case(
@@ -218,6 +225,22 @@ def multi_hd(y_true,y_pred,num_classes):
     
     return hd_list, round(np.mean(hd_list),4)
 
+class Normalize_2d(object):
+    def __call__(self, sample):
+        new_sample = {}
+        for key, value in sample.items():
+            if key == 'ct':
+                ct = value
+                if isinstance(ct, torch.Tensor):
+                    ct = ct.numpy()
+                for i in range(ct.shape[0]):
+                    for j in range(ct.shape[1]):
+                        if np.max(ct[i, j]) != 0:
+                            ct[i, j] = ct[i, j] / np.max(ct[i, j])
+                new_sample[key] = ct
+            else:
+                new_sample[key] = value
+        return new_sample
 
 def hdf5_reader(data_path, key):
     hdf5_file = h5py.File(data_path, 'r')
@@ -291,12 +314,10 @@ def dfs_remove_weight(ckpt_path,retain=5):
 def poly_lr(epoch, max_epochs,ck_epoch = 0, initial_lr = 1e-2, exponent=0.9):
     return initial_lr * (1 - (epoch - ck_epoch) / (max_epochs - ck_epoch))**exponent
 
-
 def get_cross_validation_by_sample(path_list, fold_num, current_fold):
 
     sample_list = list(set([os.path.basename(case).split('_')[0] for case in path_list]))
     sample_list.sort()
-    print(sample_list)
     print('number of sample:',len(sample_list))
     _len_ = len(sample_list) // fold_num
 

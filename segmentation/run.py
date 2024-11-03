@@ -1,5 +1,6 @@
 import argparse
 import copy
+import json
 import os
 import random
 import time
@@ -20,7 +21,6 @@ things to change:
 
 
 def get_cross_validation_by_sample(path_list, fold_num, current_fold):
-
     sample_list = list(set([os.path.basename(case).split('_')[0] for case in path_list]))
     sample_list.sort()
     print('number of sample:',len(sample_list))
@@ -91,6 +91,8 @@ if __name__ == "__main__":
             #     continue
             GRID_SETUP_TRAINER = copy.deepcopy(SETUP_TRAINER)
             GRID_INIT_TRAINER = copy.deepcopy(INIT_TRAINER)
+            GRID_SETUP_TRAINER['log_dir'] += f'_valmode_{SETUP_TRAINER["val_mode"]}'
+            GRID_SETUP_TRAINER['output_dir'] += f'_valmode_{SETUP_TRAINER["val_mode"]}'
             for param_name, param in params.items():
                 GRID_SETUP_TRAINER['log_dir'] += f'_{param_name}_{param}'
                 GRID_SETUP_TRAINER['output_dir'] += f'_{param_name}_{param}'
@@ -98,6 +100,13 @@ if __name__ == "__main__":
                     GRID_INIT_TRAINER['lr'] = param
                 if param_name == 'weight_decay':
                     GRID_INIT_TRAINER['weight_decay'] = param
+            # combined_dict = {
+            #     "SETUP_TRAINER": GRID_SETUP_TRAINER,
+            #     "INIT_TRAINER": GRID_INIT_TRAINER
+            # }
+            # if
+            # with open(os.path.join(GRID_SETUP_TRAINER['log_dir'], 'training_params.json'), 'w') as json_file:
+            #     json.dump(combined_dict, json_file, indent=4)
             for current_fold in range(1, FOLD_NUM + 1):
                 if current_fold > 1:
                     break

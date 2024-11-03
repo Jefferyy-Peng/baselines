@@ -1,4 +1,6 @@
+import os
 from typing import List, Optional, Tuple, Union
+import re
 
 import numpy as np
 import torch
@@ -15,6 +17,26 @@ except ImportError:  # pragma: no cover
 Extract lesion candidates from a softmax prediction
 Authors: anindox8, matinhz, joeranbosma
 """
+
+def search_ckpt_path(ckpt_path):
+    epoch_pattern = re.compile(r'epoch:(\d+)-')
+
+    # Initialize variables to keep track of the largest epoch and the corresponding file
+    largest_epoch = -1
+    ckpt_file = None
+
+    # Iterate over all files in the directory
+    for filename in os.listdir(ckpt_path):
+        # Match the pattern to find the epoch number
+        match = epoch_pattern.search(filename)
+        if match:
+            epoch = int(match.group(1))
+            # Update the largest epoch and file if the current epoch is larger
+            if epoch > largest_epoch:
+                largest_epoch = epoch
+                ckpt_file = filename
+
+    return ckpt_file
 
 def erode_dilate(outputs, kernel_size=7):
     kernel = np.ones((kernel_size,kernel_size),np.uint8)
@@ -41,7 +63,8 @@ def extract_lesion_candidates_static(
     confidences = []
     clipped_softmax = softmax.copy()
     pred = softmax > threshold
-    pred = erode_dilate(pred)
+    # if len(pred.shape) < 3:
+    # pred = erode_dilate(pred)
     clipped_softmax[pred < threshold] = 0
     blobs_index, num_blobs = ndimage.label(clipped_softmax, structure=np.ones((3, 3, 3)))
 
