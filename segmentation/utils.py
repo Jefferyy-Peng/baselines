@@ -24,6 +24,7 @@ class ModelName(Enum):
     swin_unetr = 'Swin-UNETR'
     unet = 'UNet'
     itunet = 'ITUNet'
+    samcnn = 'SAMCNN'
 
 
 def calculate_max_tumor_distance(mask, spacing):
@@ -170,10 +171,10 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     plt.savefig(os.path.join(save_path, f'slice_{count}'))
     plt.close()
 
-def compute_results_detect(logits, target, gland_output, results, threshold):
+def compute_results_detect(logits, target, gland_output, results, threshold, post_process):
     preds = []
     logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits
-    preds.append(extract_lesion_candidates(logits, gland_output, threshold=threshold)[0])
+    preds.append(extract_lesion_candidates(logits, gland_output, threshold=threshold, post_process=post_process)[0])
     for y_det, y_true in zip(preds,
                              [target]):
         y_list, *_ = evaluate_case(

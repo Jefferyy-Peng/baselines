@@ -319,19 +319,19 @@ class MultiLevelDataGenerator(Dataset):
             this_lesion_pid = lesion_pid[int(lesion_count)]
             if this_lesion_pid == '10705_1000721':
                 continue
-            lesion_slice = lesion_path_list[idx].split('/')[-1].split('_')[1].split('.')[0]
-            this_zone_count = zone_pid[this_lesion_pid]
-            this_gland_count = gland_pid[this_lesion_pid]
-            try:
-                zone_seg = torch.Tensor(hdf5_reader(
-                    lesion_path_list[idx].replace(PATH_DIR.split('/')[2], 'zone_segdata_all').replace(
-                        '/' + str(lesion_count), '/' + str(this_zone_count)), 'seg'))
-                gland_seg = torch.Tensor(hdf5_reader(
-                    lesion_path_list[idx].replace(PATH_DIR.split('/')[2], 'gland_segdata').replace(
-                        '/' + str(lesion_count), '/' + str(this_gland_count)), 'seg'))
-            except:
-                # print('here1')
-                continue
+            # lesion_slice = lesion_path_list[idx].split('/')[-1].split('_')[1].split('.')[0]
+            # this_zone_count = zone_pid[this_lesion_pid]
+            # this_gland_count = gland_pid[this_lesion_pid]
+            # try:
+            #     zone_seg = torch.Tensor(hdf5_reader(
+            #         lesion_path_list[idx].replace(PATH_DIR.split('/')[5], 'zone_segdata_all').replace(
+            #             '/' + str(lesion_count), '/' + str(this_zone_count)), 'seg'))
+            #     gland_seg = torch.Tensor(hdf5_reader(
+            #         lesion_path_list[idx].replace(PATH_DIR.split('/')[5], 'gland_segdata').replace(
+            #             '/' + str(lesion_count), '/' + str(this_gland_count)), 'seg'))
+            # except:
+            #     # print('here1')
+            #     continue
             # if len(np.unique(zone_seg)) != 3:
             #     print('here2')
             #     continue
@@ -383,10 +383,10 @@ class MultiLevelDataGenerator(Dataset):
         lesion_pid = self.lesion_pid[int(lesion_count)]
         lesion_slice = path.split('/')[-1].split('_')[1].split('.')[0]
         zone_count = self.zone_pid[lesion_pid]
-        gland_count = self.gland_pid[lesion_pid]
+        gland_count = None if not self.gland_pid else self.gland_pid[lesion_pid]
         # use zone_segdata_all for all dataq
-        zone_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
-        gland_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
+        zone_seg = torch.Tensor(hdf5_reader(path.replace(next((x for x in path.split('/') if 'lesion_segdata' in x), None), 'zone_segdata_158').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg')) if '_158' in path else torch.Tensor(hdf5_reader(path.replace(next((x for x in path.split('/') if 'lesion_segdata' in x), None), 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
+        gland_seg = torch.zeros_like(lesion_seg) if not self.gland_pid else torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[5], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
         lesion_seg = create_binary_masks(lesion_seg)
         zone_seg = create_binary_masks_zone(zone_seg)
         gland_seg = create_binary_masks(gland_seg)
@@ -409,6 +409,7 @@ class MultiLevelDataGenerator(Dataset):
             sample = self.transform(sample)
 
         return sample, lesion_pid, lesion_slice
+
 
 class MultiLevelDataGeneratorSeg(Dataset):
     '''
@@ -569,10 +570,10 @@ class MultiLevel3DDataGenerator(Dataset, Randomizable):
         lesion_count = path.split('/')[-1].split('.')[0]
         lesion_pid = self.lesion_pid[int(lesion_count)]
         zone_count = self.zone_pid[lesion_pid]
-        gland_count = self.gland_pid[lesion_pid]
+        gland_count = None if not self.gland_pid else self.gland_pid[lesion_pid]
         # use zone_segdata_all for all data
-        zone_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
-        gland_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
+        zone_seg = torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[5], 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
+        gland_seg = torch.zeros_like(lesion_seg) if not self.gland_pid else torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[5], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
         lesion_seg = create_binary_masks(lesion_seg)
         zone_seg = create_binary_masks_zone(zone_seg)
         gland_seg = create_binary_masks(gland_seg)

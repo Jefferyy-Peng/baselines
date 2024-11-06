@@ -28,7 +28,7 @@ import cv2
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, MultiLevelDataGenerator, DataGenerator_no_resize)
-from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN
+from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN, MedSAM
 from segmentation.config import FOLD_NUM, CURRENT_FOLD
 from segmentation.model import itunet_2d
 from segmentation.model_single import ModelEmb, SegDecoderCNN
@@ -285,6 +285,37 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
     # plt.savefig(os.path.join(save_path, f'slice_{count}'))
     # plt.close()
 
+@torch.no_grad()
+def medsam_inference(medsam_model, img_embed, box_1024, H, W):
+    box_torch = torch.as_tensor(box_1024, dtype=torch.float, device=img_embed.device)
+    if len(box_torch.shape) == 2:
+        box_torch = box_torch[:, None, :]  # (B, 1, 4)
+
+    sparse_embeddings, dense_embeddings = medsam_model.prompt_encoder(
+        points=None,
+        boxes=box_torch,
+        masks=None,
+    )
+    low_res_logits, _ = medsam_model.mask_decoder(
+        image_embeddings=img_embed,  # (B, 256, 64, 64)
+        image_pe=medsam_model.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
+        sparse_prompt_embeddings=sparse_embeddings,  # (B, 2, 256)
+        dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
+        multimask_output=False,
+    )
+
+    low_res_pred = torch.sigmoid(low_res_logits)  # (1, 1, 256, 256)
+
+    low_res_pred = F.interpolate(
+        low_res_pred,
+        size=(H, W),
+        mode="bilinear",
+        align_corners=False,
+    )  # (1, 1, gt.shape)
+    low_res_pred = low_res_pred.squeeze().cpu().numpy()  # (256, 256)
+    medsam_seg = (low_res_pred > 0.5).astype(np.uint8)
+    return medsam_seg
+
 def plot_segmentation3D_lesion(img3D, lesion_prev_masks, lesion_gt3D, lesion_ap, lesion_auc, save_path, count, image_dice=None):
     """
         Plot each slice of a 3D image, its corresponding previous mask, and ground truth mask.
@@ -421,7 +452,16 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
     # os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
 
 def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, activation, post_process, threshold, mode='normal',image_size=1024):
-    ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
+    if ckpt_path is not None:
+        ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
+        state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k.replace('module.', '')  # remove `module.` prefix
+            new_state_dict[name] = v
+
+        net.load_state_dict(new_state_dict)
+
 
     # with open('./dataset/lesion_segdata_combined/data_split.p', 'rb') as f:
     #     loaded_dict = pickle.load(f)
@@ -429,17 +469,10 @@ def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, acti
     image_tsne = TSNE(n_components=2, random_state=42)
     dense_tsne = TSNE(n_components=2, random_state=42)
 
-    state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
 
     revert_transform = Resize((256, 256), mode='bilinear')
     seg_transform = Resize((256, 256), mode='nearest')
 
-    new_state_dict = OrderedDict()
-    for k, v in state_dict.items():
-        name = k.replace('module.', '')  # remove `module.` prefix
-        new_state_dict[name] = v
-
-    net.load_state_dict(new_state_dict)
     net.eval()
     net.to(device)
     net = DataParallel(net, device_ids=[0, 1, 2, 3, 4, 5])
@@ -486,12 +519,21 @@ def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, acti
     image_embeddings = []
     dense_embeddings = []
     image_targets = []
+    margin = 10
     with torch.no_grad():
         for step, (sample, path) in enumerate(tqdm(val_loader)):
             # if path[0] in loaded_dict['small']:
             #     continue
             data = sample['ct']
             target = sample['seg']
+            for id, slice in enumerate(target.squeeze(0)):
+                lesion_indices = torch.where(slice != 0)
+                if len(lesion_indices[0]) == 0 and len(lesion_indices[1]) == 0:
+                    continue
+                bbox = [np.min(lesion_indices[1]) - margin, np.min(lesion_indices[0]) - margin,
+                        np.max(lesion_indices[1]) + margin, np.max(lesion_indices[0]) + margin]
+                medsam_seg = medsam_inference(net, image_embedding, bbox, 1024, 1024)
+
 
             data = data if model_name == ModelName.swin_unetr else data.squeeze().transpose(1, 0)
             data = data.to(device)
@@ -637,56 +679,16 @@ def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, acti
 if __name__ == '__main__':
     PHASE = 'detect'
 
-    model_name = ModelName.itunet
+    model_name = 'medsam'
 
     mode = 'normal'
 
-    is_post_process = True
-    threshold = 0.5
-    if model_name == ModelName.unet:
-        activation = False
-        image_size = 256
-        net = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
-                                           in_channels=3, out_channels=4, init_features=32, pretrained=False)
-    elif model_name == ModelName.itunet:
-        activation = True
-        image_size = 384
-        net = itunet_2d(n_channels=3, n_classes=4,
-                  image_size=(image_size, image_size), transformer_depth=24)
-    elif model_name == ModelName.medsam:
+    is_post_process = False
+    threshold = 'dynamic-fast'
+    if model_name == 'medsam':
         activation = True
         image_size = 1024
-        sam_model = sam_model_registry['vit_b'](checkpoint='/data/nvme1/meng/cvpr25_results/medsam_vit_b.pth')
-        dense_model = ModelEmb()
-        multi_mask_decoder = MaskDecoder(
-            num_multimask_outputs=4,
-            transformer=TwoWayTransformer(
-                depth=2,
-                embedding_dim=256,
-                mlp_dim=2048,
-                num_heads=8,
-            ),
-            transformer_dim=256,
-            iou_head_depth=3,
-            iou_head_hidden_dim=256,
-        )
-        net = MedSAMAUTOMULTI(
-            image_encoder=sam_model.image_encoder,
-            mask_decoder=multi_mask_decoder,
-            prompt_encoder=sam_model.prompt_encoder,
-            dense_encoder=dense_model,
-            image_size=512,
-            mode=mode
-        )
-    elif model_name == ModelName.swin_unetr:
-        activation = True
-        image_size = 256
-        net = SwinUNETR(img_size=(32, image_size, image_size),
-                          in_channels=3,
-                          out_channels=4,
-                          feature_size=48,
-                          use_checkpoint=True,
-                          )
+        net = sam_model_registry['vit_b'](checkpoint='/data/nvme1/meng/cvpr25_results/medsam_vit_b.pth')
 
     # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
     #
@@ -699,10 +701,10 @@ if __name__ == '__main__':
     # )
 
 
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'ITUNet_Focal_Unified_equal_rate_0.8_weighted_loss_imagesize_384_combined_label_lr_0.0001_weight_decay_0.001')
+    ckpt_path = None
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    log_dir = f'./new_log/eval/ITUNet_Focal_Unified_equal_rate_0.8_weighted_loss_imagesize_384_combined_label_lr_0.0001_weight_decay_0.001_threshold_{threshold}'
+    log_dir = f'./new_log/eval/MedSAM_threshold_{threshold}_no_postp'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
         PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_2d'

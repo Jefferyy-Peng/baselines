@@ -36,6 +36,37 @@ class FocalLoss(nn.Module):
 
         return loss
 
+class MixedLoss(nn.Module):
+    """Focal loss function for binary segmentation."""
+
+    def __init__(self, alpha=[0.8, 0.8, 0.8, 0.97], gamma=2, num_classes=2, activation=True, reduction="mean"):
+        super(MixedLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.num_classes = num_classes
+        self.reduction = reduction
+        self.activation = activation
+
+    def forward(self, inputs, targets):
+        self.alpha = torch.Tensor(self.alpha).repeat(targets.shape[0], 1)
+        if self.activation:
+            inputs = torch.sigmoid(inputs)
+        ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
+
+        p_t = inputs * targets + (1 - inputs) * (1 - targets)
+        loss = (1 - p_t) ** self.gamma * ce_loss
+
+        if self.alpha >= 0:
+            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+            loss = alpha_t * loss
+
+        if self.reduction == "mean":
+            loss = loss.mean()
+        elif self.reduction == "sum":
+            loss = loss.sum()
+
+        return loss
+
 class DiceLoss(nn.Module):
     """Focal loss function for binary segmentation."""
 
@@ -78,6 +109,7 @@ class Deep_Supervised_Loss(nn.Module):
         self.fl = FocalLoss(activation=activation)
         # self.dl = DiceLoss(activation=activation, weight=torch.tensor([0.2, 0.2, 0.2, 0.4], dtype=torch.float32))
         self.dl = DiceLoss(activation=activation)
+        self.mix = MixedLoss(activation=activation)
         self.mode = mode
         self.model_name = model_name
     def forward(self, input, target):
@@ -96,5 +128,8 @@ class Deep_Supervised_Loss(nn.Module):
         elif self.mode == 'Focal':
             self.fl.reduction = 'sum'
             return self.fl(input, target)
+        elif self.mode == 'Mixed':
+            self.fl.reduction = 'sum'
+            return self.mix(input, target)
         else:
             raise NotImplementedError

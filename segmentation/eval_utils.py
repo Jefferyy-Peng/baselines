@@ -53,6 +53,7 @@ def extract_lesion_candidates_static(
     threshold: float = 0.10,
     min_voxels_detection: int = 10,
     max_prob_round_decimals: Optional[int] = 4,
+    post_process=True,
     gland_output=None
 ) -> "Tuple[npt.NDArray[np.float_], List[Tuple[int, float]], npt.NDArray[np.int_]]":
     """
@@ -64,7 +65,8 @@ def extract_lesion_candidates_static(
     clipped_softmax = softmax.copy()
     pred = softmax > threshold
     # if len(pred.shape) < 3:
-    # pred = erode_dilate(pred)
+    if post_process:
+        pred = erode_dilate(pred)
     clipped_softmax[pred < threshold] = 0
     blobs_index, num_blobs = ndimage.label(clipped_softmax, structure=np.ones((3, 3, 3)))
 
@@ -178,6 +180,7 @@ def extract_lesion_candidates(
     num_lesions_to_extract = 5,
     dynamic_threshold_factor = 2.5,
     max_prob_round_decimals = None,
+    post_process=True,
     remove_adjacent_lesion_candidates = True,
 ):
     """
@@ -239,7 +242,9 @@ def extract_lesion_candidates(
             softmax=softmax,
             threshold=threshold,
             min_voxels_detection=min_voxels_detection,
-            max_prob_round_decimals=max_prob_round_decimals
+            max_prob_round_decimals=max_prob_round_decimals,
+            post_process=post_process,
+            gland_output=gland_output
         )
     else:
         threshold = float(threshold)  # convert threshold to float, if it wasn't already
@@ -248,6 +253,7 @@ def extract_lesion_candidates(
             threshold=threshold,
             min_voxels_detection=min_voxels_detection,
             max_prob_round_decimals=max_prob_round_decimals,
+            post_process=post_process,
             gland_output=gland_output
         )
 

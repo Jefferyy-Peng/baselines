@@ -1,5 +1,6 @@
 import copy
 import glob
+import math
 import os
 import pickle
 import random
@@ -216,11 +217,13 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
     fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(18, 18))
     axes[0, 0].imshow(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
     axes[0, 0].set_title('channel 0')
-    image_pred = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks)
-    image_gt = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[0], zone_gt2D[1], gland_gt2D.squeeze(0))
+    width = math.ceil(img2D.shape[0] * (7/1024))
+    image_pred = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    # Note that in prostate158 pz is 2 and tz is 1, while in picai pz is 1 and tz is 2, so need to flip the gt here
+    image_gt = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1], zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
     lesion_dice = compute_dice(lesion_prev_masks.int(), lesion_gt2D[0])
-    pz_dice = compute_dice(zone_prev_masks[0].int(), zone_gt2D[0])
-    tz_dice = compute_dice(zone_prev_masks[1].int(), zone_gt2D[1])
+    pz_dice = compute_dice(zone_prev_masks[0].int(), zone_gt2D[1])
+    tz_dice = compute_dice(zone_prev_masks[1].int(), zone_gt2D[0])
     gland_dice = compute_dice(gland_prev_masks.int(), gland_gt2D[0])
     fig.suptitle(f'lesion_dice: {lesion_dice}, pz_dice: {pz_dice}, tz_dice: {tz_dice}, gland_dice: {gland_dice}')
     axes[0, 1].imshow(image_pred)
@@ -231,9 +234,9 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
     axes[1, 0].imshow(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
     axes[1, 0].set_title('channel 1')
     image_pred = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
-                             zone_prev_masks[1], gland_prev_masks)
-    image_gt = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[0],
-                           zone_gt2D[1], gland_gt2D.squeeze(0))
+                             zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    image_gt = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
+                           zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
     axes[1, 1].imshow(image_pred)
     axes[1, 1].set_title('predicted results')
     axes[1, 2].imshow(image_gt)
@@ -242,15 +245,15 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
     axes[2, 0].imshow(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
     axes[2, 0].set_title('channel 2')
     image_pred = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
-                             zone_prev_masks[1], gland_prev_masks)
-    image_gt = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[0],
-                           zone_gt2D[1], gland_gt2D.squeeze(0))
+                             zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    image_gt = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
+                           zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
     axes[2, 1].imshow(image_pred)
     axes[2, 1].set_title('predicted results')
     axes[2, 2].imshow(image_gt)
     axes[2, 2].set_title('ground truth')
 
-    plt.savefig(os.path.join(save_path, f'slice_{count}'))
+    plt.savefig(os.path.join(save_path, 'plots', f'slice_{count}'))
 
     return lesion_dice, pz_dice, tz_dice, gland_dice
 
@@ -313,12 +316,12 @@ def plot_segmentation3D_lesion(img3D, lesion_prev_masks, lesion_gt3D, lesion_ap,
 
     return lesion_dice
 
-def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device, activation, is_post_process, threshold, image_size=1024):
+def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device, activation, is_post_process, threshold, image_size=1024, dataset='picai'):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
     lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
     # use zone_segdata_all for all data
-    zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
-    gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
+    zone_pid = pickle.load(open('./dataset/zone_segdata_158/zone_pid.p', 'rb')) if dataset == '158' else pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
+    gland_pid = None if dataset == '158' else pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
 
     state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
 
@@ -351,10 +354,14 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
     count = 0
 
     dice_dict = {}
-    lesion_results = []
+    lesion_dices = []
+    positive_lesion_dices = []
+    pz_dices = []
+    tz_dices = []
+    gland_dices = []
     with torch.no_grad():
         for step, (sample, pid, slice) in enumerate(tqdm(val_loader)):
-            if os.path.exists(os.path.join(log_dir, 'slice_' + pid[0]+'-'+slice[0] + '.png')):
+            if os.path.exists(os.path.join(log_dir, 'plots', 'slice_' + pid[0]+'-'+slice[0] + '.png')):
                 continue
             lesion_targets = []
             zone_targets = []
@@ -408,8 +415,20 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
             #     # aggregate all validation evaluations
             #     lesion_results.append(y_list)
             lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), log_dir, pid[0]+'-'+slice[0])
+            lesion_dices.append(lesion_dice)
+            pz_dices.append(pz_dice)
+            tz_dices.append(tz_dice)
+            gland_dices.append(gland_dice)
+            if lesion_target.max() > 0:
+                positive_lesion_dices.append(lesion_dice)
             dice_dict[pid[0] if isinstance(pid, list) else pid] = [lesion_dice, pz_dice, tz_dice, gland_dice]
             count += 1
+    lesion_mean_dice = torch.Tensor(lesion_dices).mean()
+    positive_lesion_mean_dice = torch.Tensor(positive_lesion_dices).mean()
+    pz_mean_dice = torch.Tensor(pz_dices).mean()
+    tz_mean_dice = torch.Tensor(tz_dices).mean()
+    gland_mean_dice = torch.Tensor(gland_dices).mean()
+    os.system(f'cd {log_dir} && touch dice_result.txt && echo "lesion_mean_dice: {lesion_mean_dice}, pz_mean_dice:{pz_mean_dice}, tz_mean_dice: {tz_mean_dice}, gland_mean_dice: {gland_mean_dice}, positive_lesion_mean_dice: {positive_lesion_mean_dice}" >> dice_result.txt')
     # lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
     # valid_metrics = Metrics(lesion_results)
     # auc = valid_metrics.auroc
@@ -420,7 +439,7 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
     # os.system(f'touch result.txt')
     # os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
 
-def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, activation, post_process, threshold, mode='normal',image_size=1024):
+def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, activation, post_process, threshold, mode='normal',image_size=1024, dataset='picai'):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
 
     # with open('./dataset/lesion_segdata_combined/data_split.p', 'rb') as f:
@@ -635,11 +654,13 @@ def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, acti
 
 
 if __name__ == '__main__':
-    PHASE = 'detect'
+    PHASE = 'seg'
 
-    model_name = ModelName.itunet
+    model_name = ModelName.unet
 
     mode = 'normal'
+    dataset = '158'
+    # dataset = 'picai'
 
     is_post_process = True
     threshold = 0.5
@@ -699,18 +720,17 @@ if __name__ == '__main__':
     # )
 
 
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'ITUNet_Focal_Unified_equal_rate_0.8_weighted_loss_imagesize_384_combined_label_lr_0.0001_weight_decay_0.001')
+    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'UNet_Focal_Unified_equal_rate_batch_70_tumorsplit_0.001_0.97_weighted_loss_image_256_combined_label__valmode_3d_lr_0.0001_weight_decay_0.001')
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    log_dir = f'./new_log/eval/ITUNet_Focal_Unified_equal_rate_0.8_weighted_loss_imagesize_384_combined_label_lr_0.0001_weight_decay_0.001_threshold_{threshold}'
+    log_dir = f'./new_log/eval/UNet_Focal_Unified_equal_rate_batch_70_tumorsplit_0.001_0.97_weighted_loss_image_256_combined_label__valmode_3d_lr_0.0001_weight_decay_0.001_threshold_{threshold}_dataset_{dataset}'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
-        PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_2d'
+        PATH_DIR = './dataset/lesion_segdata_158/data_2d'
         PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
-        train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
-        plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, threshold, image_size=image_size)
+        # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
+        plot_eval_multi_level(net, model_name, PATH_LIST, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, threshold, image_size=image_size, dataset=dataset)
     else:
-        PATH_AP = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d'
+        PATH_AP = './dataset/lesion_segdata_158/data_3d'
         AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
-        train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
-        plot_eval_detect(net, model_name, val_AP, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, threshold, mode, image_size=image_size)
+        plot_eval_detect(net, model_name, AP_LIST, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, threshold, mode, image_size=image_size, dataset=dataset)

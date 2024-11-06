@@ -5,9 +5,11 @@ import json
 from utils import get_weight_path, ModelName
 
 TRANSFORMER_DEPTH = 24
-MODEL_NAME = ModelName.medsam
-batch_size = 32
-VERSION = f'{MODEL_NAME.value}_Focal_Unified_equal_rate_batch_{batch_size}_tumorsplit_0.001_0.97_weighted_loss_image_1024_combined_label_test'
+MODEL_NAME = ModelName.samcnn
+batch_size = 16
+# dataset = '158'
+dataset = 'picai'
+VERSION = f'{MODEL_NAME.value}_Focal_Unified_equal_rate_batch_{batch_size}_tumorsplit_0.001_mixed_loss_0.8*3-0.97_image_1024_dataset_{dataset}'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -27,9 +29,13 @@ CURRENT_FOLD = 5
 GPU_NUM = len(DEVICE.split(','))
 
 #--------------------------------- mode and data path setting
-PATH_DIR = './dataset/combined/data_3d' if MODEL_NAME == ModelName.swin_unetr else './dataset/combined/data_2d'
+if dataset == 'picai':
+  PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d' if MODEL_NAME == ModelName.swin_unetr else '/data/nvme1/meng/picai/lesion_segdata_combined/data_2d'
+  PATH_AP = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d'
+elif dataset == '158':
+  PATH_DIR = './dataset/lesion_segdata_158/data_3d' if MODEL_NAME == ModelName.swin_unetr else './dataset/lesion_segdata_158/data_2d'
+  PATH_AP = './dataset/lesion_segdata_158/data_3d'
 PATH_LIST = glob.glob(os.path.join(PATH_DIR,'*.hdf5'))
-PATH_AP = './dataset/combined/data_3d'
 AP_LIST = glob.glob(os.path.join(PATH_AP,'*.hdf5'))
 #--------------------------------- 
 
@@ -42,7 +48,7 @@ INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
   'batch_size':batch_size,
-  'num_workers':12,
+  'num_workers':8,
   'device':'cuda',
   'pre_trained':PRE_TRAINED,
   'ckpt_point':CKPT_POINT,
@@ -61,7 +67,7 @@ SETUP_TRAINER = {
   'output_dir':'./new_ckpt/{}/{}'.format(PHASE,VERSION),
   'log_dir':'./new_log/{}/{}'.format(PHASE,VERSION),
   'phase':PHASE,
-  'activation': True if MODEL_NAME == ModelName.medsam or MODEL_NAME == ModelName.itunet or MODEL_NAME == ModelName.swin_unetr else False,
-  'val_mode': '2d',
+  'activation': False if MODEL_NAME == ModelName.unet else True,
+  'val_mode': '3d',
   'resume': resume
   }

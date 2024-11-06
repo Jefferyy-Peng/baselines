@@ -71,7 +71,7 @@ def make_segdata(base_dir,label_dir,output_dir):
 
     count = 0
 
-    pathlist = ['_'.join(path.split('_')[:2]) for path in os.listdir(base_dir)]
+    pathlist = ['_'.join(path.split('_')[:1]) for path in os.listdir(base_dir)]
     pathlist = sorted(list(set(pathlist)))
     print(len(pathlist))
     pid_dict = {}
@@ -82,7 +82,7 @@ def make_segdata(base_dir,label_dir,output_dir):
 
         seg_image = sitk.GetArrayFromImage(seg).astype(np.uint8)
         # comment for zone segmentations (zone have >= 2 values and is used)
-        seg_image[seg_image>=2] = 1
+        # seg_image[seg_image>=2] = 1
 
         # comment for samples that have 1 values
         # if np.max(seg_image) == 0:
@@ -104,7 +104,7 @@ def make_segdata(base_dir,label_dir,output_dir):
         save_as_hdf5(seg_image,hdf5_path,'seg')
 
         # count -> path for lesion, path -> count for gland and zone
-        pid_dict[count] = path
+        pid_dict[path] = count
         store_images_labels_2d(data_dir_2d,count,img,seg_image)
 
         count += 1
@@ -197,9 +197,9 @@ def make_semidata(base_dir,label_dir,output_dir,test_dir,seg_dir,csv_path):
 
 if __name__ == "__main__":
     phase = 'seg'
-    base_dir = '../output_lesion_combined/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
-    label_dir = '../output_lesion_combined/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
-    output_dir = './dataset/lesion_segdata_combined'
+    base_dir = '../output_zone_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr'
+    label_dir = '../output_zone_158/nnUNet_raw_data/Task2201_picai_baseline/labelsTr'
+    output_dir = './dataset/zone_segdata_158'
     test_dir = 'path/to/nnUNet_test_data'
     seg_dir = 'path/to/segmentation_result'
     csv_path = 'path/to/classification_result'

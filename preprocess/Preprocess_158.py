@@ -10,7 +10,8 @@ import numpy as np
 import h5py
 import random
 import nibabel as nib
-from picai_prep.preprocessing import resample_img, crop_or_pad, Sample, PreprocessingSettings
+from picai_prep.preprocessing import resample_img, crop_or_pad, PreprocessingSettings
+from utils import Sample
 
 import SimpleITK as sitk
 
@@ -30,41 +31,122 @@ settings = {
     }
 }
 
-dataset_root = '/home/yxpengcs/Datasets/MRI/prostate158'
+train_df = pd.read_csv('/data/nvme1/meng/prostate158/train/train.csv')
+valid_df = pd.read_csv('/data/nvme1/meng/prostate158/train/valid.csv')
+test_df = pd.read_csv('/data/nvme1/meng/prostate158/test/test.csv')
+
+train_df['split'] = 'train'
+valid_df['split'] = 'valid'
+test_df['split'] = 'test'
+whole_df = []
+whole_df += [train_df]
+whole_df += [valid_df]
+whole_df += [test_df]
+df = pd.concat(whole_df)
+cols = ['ID', 't2', 'adc', 'dwi'] + ['adc_tumor_reader1'] + ['t2_anatomy_reader1']
+for col in cols:
+    if col == 'ID':
+        continue
+    # create absolute file name from relative fn in df and data_dir
+    df[col] = [os.path.join('/data/nvme1/meng/prostate158/', fn) for fn in df[col]]
+    if not os.path.exists(list(df[col])[0]):
+        raise FileNotFoundError(list(df[col])[0])
+
+data_dict = [dict(row[1]) for row in df[cols].iterrows()]
+# data_dict is not the correct name, list_of_data_dicts would be more accurate, but also longer.
+# The data_dict looks like this:
+# [
+#  {'image_col_1': 'data_dir/path/to/image1',
+#   'image_col_2': 'data_dir/path/to/image2'
+#   'label_col_1': 'data_dir/path/to/label1},
+#  {'image_col_1': 'data_dir/path/to/image1',
+#   'image_col_2': 'data_dir/path/to/image2'
+#   'label_col_1': 'data_dir/path/to/label1},
+#    ...]
+# Filename should now be absolute or relative to working directory
+
+# now we create separate data dicts for train, valid and test data respectively
+test_files = list(map(data_dict.__getitem__, *np.where(df.split == 'test')))
+
+val_files = list(map(data_dict.__getitem__, *np.where(df.split == 'valid')))
+
+train_files = list(map(data_dict.__getitem__, *np.where(df.split == 'train')))
+
+dataset_root = '/data/nvme1/meng/prostate158'
 
 train_path = os.path.join(dataset_root, 'train')
 
 test_path = os.path.join(dataset_root, 'test')
+os.makedirs('../output_lesion_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr', exist_ok=True)
+os.makedirs('../output_lesion_158/nnUNet_raw_data/Task2201_picai_baseline/labelsTr', exist_ok=True)
+os.makedirs('../output_zone_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr', exist_ok=True)
+os.makedirs('../output_zone_158/nnUNet_raw_data/Task2201_picai_baseline/labelsTr', exist_ok=True)
+for files in [train_files, val_files, test_files]:
+    for file in files:
+        adc_path = file['adc']
+        dwi_path = file['dwi']
+        t2_path = file['t2']
+        t2 = sitk.ReadImage(t2_path)
+        adc = sitk.ReadImage(adc_path)
+        dwi = sitk.ReadImage(dwi_path)
+        anatomy_path = file['t2_anatomy_reader1']
+        anatomy = sitk.ReadImage(anatomy_path)
+        scans = [t2, adc, dwi]
 
-for folder in os.listdir(train_path):
-    data_path = os.path.join(train_path, folder)
-    data_files = os.listdir(data_path)
-    if 'adc_tumor_reader1.nii.gz' in data_files:
-        tumor_path = os.path.join(data_path, 'adc_tumor_reader1.nii.gz')
-    if 't2_anatomy_reader1.nii.gz' in data_files:
-        anatomy_path = os.path.join(data_path, 't2_anatomy_reader1.nii.gz')
-    adc_path = os.path.join(data_path, 'adc.nii.gz')
-    dwi_path = os.path.join(data_path, 'dwi.nii.gz')
-    t2_path = os.path.join(data_path, 't2.nii.gz')
-    t2 = sitk.ReadImage(t2_path)
-    adc = sitk.ReadImage(adc_path)
-    dwi = sitk.ReadImage(dwi_path)
-    tumor = sitk.ReadImage(tumor_path)
-    anatomy = sitk.ReadImage(anatomy_path)
-    scans = [t2, adc, dwi]
+        # set up Sample
+        sample = Sample(
+            scans=scans,
+            lbl=anatomy,
+            settings=PreprocessingSettings(**settings['preprocessing']),
+            name=str(file['ID'])
+        )
 
-    # set up Sample
-    sample = Sample(
-        scans=scans,
-        lbl=tumor,
-        settings=PreprocessingSettings(**settings['preprocessing']),
-        name=folder
-    )
+        sample.preprocess()
+        # write images
 
-    sample.preprocess()
+        sitk.WriteImage(sample.scans[0], f'../output_zone_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr/{file["ID"]}_0000.nii.gz', useCompression=True)
+        sitk.WriteImage(sample.scans[1],
+                        f'../output_zone_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr/{file["ID"]}_0001.nii.gz',
+                        useCompression=True)
+        sitk.WriteImage(sample.scans[2],
+                        f'../output_zone_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr/{file["ID"]}_0002.nii.gz',
+                        useCompression=True)
+        sitk.WriteImage(sample.lbl,
+                        f'../output_zone_158/nnUNet_raw_data/Task2201_picai_baseline/labelsTr/{file["ID"]}.nii.gz',
+                        useCompression=True)
+for files in [train_files, val_files, test_files]:
+    for file in files:
+        adc_path = file['adc']
+        dwi_path = file['dwi']
+        t2_path = file['t2']
+        t2 = sitk.ReadImage(t2_path)
+        adc = sitk.ReadImage(adc_path)
+        dwi = sitk.ReadImage(dwi_path)
+        tumor_path = file['adc_tumor_reader1']
+        tumor = sitk.ReadImage(tumor_path)
+        scans = [t2, adc, dwi]
 
-    # write images
-    atomic_image_write(sample.scans, path='../output_lesion_158/nnUNet_raw_data', mkdir=True)
+        # set up Sample
+        sample = Sample(
+            scans=scans,
+            lbl=tumor,
+            settings=PreprocessingSettings(**settings['preprocessing']),
+            name=str(file['ID'])
+        )
+
+        sample.preprocess()
+        # write images
+
+        sitk.WriteImage(sample.scans[0], f'../output_lesion_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr/{file["ID"]}_0000.nii.gz', useCompression=True)
+        sitk.WriteImage(sample.scans[1],
+                        f'../output_lesion_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr/{file["ID"]}_0001.nii.gz',
+                        useCompression=True)
+        sitk.WriteImage(sample.scans[2],
+                        f'../output_lesion_158/nnUNet_raw_data/Task2201_picai_baseline/imagesTr/{file["ID"]}_0002.nii.gz',
+                        useCompression=True)
+        sitk.WriteImage(sample.lbl,
+                        f'../output_lesion_158/nnUNet_raw_data/Task2201_picai_baseline/labelsTr/{file["ID"]}.nii.gz',
+                        useCompression=True)
 
 # Load the .nii.gz file
 file_path = "/home/yxpengcs/Datasets/MRI/prostate158/prostate158_train/train/020/adc.nii.gz"

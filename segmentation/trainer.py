@@ -33,6 +33,7 @@ from model import itunet_2d
 from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from config import PATH_DIR
 from segment_anything.modeling import MaskDecoder, TwoWayTransformer
+from segmentation.lora_image_encoder import LoRA_Sam
 from utils import Normalize_2d
 from eval_utils import search_ckpt_path
 from utils import dfs_remove_weight, poly_lr, compute_results_detect, plot_segmentation2D, ModelName
@@ -107,7 +108,6 @@ class SemanticSeg(object):
         # os.environ['CUDA_VISIBLE_DEVICES'] = self.device
         # using UNet need to disable all sigmoid activation function
 
-        sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
 
         # # Create LoRA configuration
         # lora_config = LoraConfig(
@@ -121,30 +121,39 @@ class SemanticSeg(object):
         # # Apply LoRA to the image encoder
         # sam_model.image_encoder = get_peft_model(sam_model.image_encoder, lora_config)
 
-        dense_model = ModelEmb()
-        multi_mask_decoder = MaskDecoder(
-            num_multimask_outputs=4,
-            transformer=TwoWayTransformer(
-                depth=2,
-                embedding_dim=256,
-                mlp_dim=2048,
-                num_heads=8,
-            ),
-            transformer_dim=256,
-            iou_head_depth=3,
-            iou_head_hidden_dim=256,
-        )
         if model_name == ModelName.medsam:
+            sam_model = sam_model_registry['vit_b'](checkpoint='/data/nvme1/meng/cvpr25_results/medsam_vit_b.pth')
+            dense_model = ModelEmb()
+            multi_mask_decoder = MaskDecoder(
+                num_multimask_outputs=4,
+                transformer=TwoWayTransformer(
+                    depth=2,
+                    embedding_dim=256,
+                    mlp_dim=2048,
+                    num_heads=8,
+                ),
+                transformer_dim=256,
+                iou_head_depth=3,
+                iou_head_hidden_dim=256,
+            )
             self.net = DataParallel(MedSAMAUTOMULTI(
                     image_encoder=sam_model.image_encoder,
                     mask_decoder=multi_mask_decoder,
                     prompt_encoder=sam_model.prompt_encoder,
                     dense_encoder=dense_model,
                     image_size=512
-                ), device_ids=[0, 1, 2, 3, 4, 5, 6, 7])
+                ), device_ids=[0, 1, 2, 3])
             if finetune:
                 state_dict = torch.load(load_ckpt, map_location=device)['state_dict']
                 self.net.load_state_dict(state_dict)
+        elif model_name == ModelName.samcnn:
+            sam_model = sam_model_registry['vit_b'](checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth')
+            lora_sam_model = LoRA_Sam(sam_model, 4)
+            multi_mask_decoder = SegDecoderCNN(num_classes=4, num_depth=4)
+            self.net = DataParallel(MedSAMAUTOCNN(
+                    image_encoder=lora_sam_model.sam.image_encoder,
+                    mask_decoder=multi_mask_decoder,
+                ), device_ids=[0, 1, 2, 3, 4, 5, 6, 7])
         elif model_name == ModelName.swin_unetr:
             self.net = DataParallel(
                 SwinUNETR(img_size=(32, image_size[0], image_size[1]),
@@ -255,8 +264,8 @@ class SemanticSeg(object):
             net = DataParallel(net)
 
         lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
-        zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
-        gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
+        zone_pid = pickle.load(open(os.path.join(PATH_DIR, '../../zone_segdata_all/zone_pid.p'), 'rb'))
+        gland_pid = pickle.load(open(os.path.join(PATH_DIR, '../../gland_segdata/gland_pid.p'), 'rb'))
         if self.model_name == ModelName.swin_unetr:
             train_transformer = transforms.Compose([
                 ScaleIntensityD(keys=["ct"]),
@@ -307,11 +316,12 @@ class SemanticSeg(object):
             #                                         transform=train_transformer,lesion_pid=lesion_pid)
 
             train_loader = DataLoader(
-              train_dataset,
-              batch_size=self.batch_size,
-              shuffle=True,
-              num_workers=self.num_workers,
-              pin_memory=True
+                train_dataset,
+                batch_size=self.batch_size,
+                shuffle=True,
+                num_workers=self.num_workers,
+                pin_memory=True,
+                prefetch_factor=1
             )
             if val_mode == '2d':
                 val_transformer = transforms.Compose([
@@ -328,7 +338,7 @@ class SemanticSeg(object):
                     batch_size=self.batch_size,
                     shuffle=False,
                     num_workers=self.num_workers,
-                    pin_memory=True
+                    pin_memory=True,
                 )
             else:
                 if self.model_name == ModelName.swin_unetr:
@@ -352,7 +362,8 @@ class SemanticSeg(object):
                     batch_size=1,
                     shuffle=False,
                     num_workers=self.num_workers,
-                    pin_memory=True
+                    pin_memory=True,
+                    prefetch_factor=1
                 )
         if resume:
             ckpt_file = search_ckpt_path(resume)
