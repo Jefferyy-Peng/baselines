@@ -49,6 +49,7 @@ class MixedLoss(nn.Module):
 
     def forward(self, inputs, targets):
         self.alpha = torch.Tensor(self.alpha).repeat(targets.shape[0], 1)
+
         if self.activation:
             inputs = torch.sigmoid(inputs)
         ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")

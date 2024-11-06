@@ -5,6 +5,7 @@ import os
 import pickle
 import shutil
 import warnings
+from importlib import import_module
 
 import numpy as np
 import torch
@@ -20,6 +21,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
+from sam_fact_tt_image_encoder import Fact_tt_Sam
 
 from segment_anything import sam_model_registry
 from model_single import ModelEmb, SegDecoderCNN
@@ -34,6 +36,7 @@ from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from config import PATH_DIR
 from segment_anything.modeling import MaskDecoder, TwoWayTransformer
 from segmentation.lora_image_encoder import LoRA_Sam
+from segmentation.segment_anything_from_MASAM.build_sam import sam_model_registry_MASAM
 from utils import Normalize_2d
 from eval_utils import search_ckpt_path
 from utils import dfs_remove_weight, poly_lr, compute_results_detect, plot_segmentation2D, ModelName
@@ -169,8 +172,15 @@ class SemanticSeg(object):
         elif model_name == ModelName.itunet:
             self.net = DataParallel(itunet_2d(n_channels=self.channels, n_classes=4,
                                  image_size=self.image_size, transformer_depth=self.transformer_depth))
+        elif model_name == ModelName.masam:
+            sam, img_embedding_size = sam_model_registry_MASAM['vit_b'](image_size=self.img_size,
+                                                                        num_classes=4,
+                                                                        checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth', pixel_mean=[0., 0., 0.],
+                                                                        pixel_std=[1., 1., 1.])
 
-
+            self.net = DataParallel(Fact_tt_Sam(sam, 32, s=1.0), device_ids=[0, 1, 2, 3, 4, 5, 6, 7])
+        elif model_name == ModelName.transunet:
+            self.net = DataParallel(VisionTransformer(con))
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
         #
         # self.net = DataParallel(MedSAMAUTOCNN(

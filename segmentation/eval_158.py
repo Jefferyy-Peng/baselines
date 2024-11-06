@@ -28,7 +28,8 @@ from tqdm import tqdm
 import cv2
 
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
-                         RandomRotate2D, To_Tensor, MultiLevelDataGenerator, DataGenerator_no_resize)
+                         RandomRotate2D, To_Tensor, MultiLevelDataGenerator, DataGenerator_no_resize,
+                         MultiLevel3DDataGenerator)
 from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from segmentation.config import FOLD_NUM, CURRENT_FOLD
 from segmentation.model import itunet_2d
@@ -214,46 +215,46 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
         """
     os.makedirs(save_path, exist_ok=True)
     # Determine the number of slices based on the selected axis
-    fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(18, 18))
-    axes[0, 0].imshow(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
-    axes[0, 0].set_title('channel 0')
-    width = math.ceil(img2D.shape[0] * (7/1024))
-    image_pred = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
-    # Note that in prostate158 pz is 2 and tz is 1, while in picai pz is 1 and tz is 2, so need to flip the gt here
-    image_gt = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1], zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
+    # fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(18, 18))
+    # axes[0, 0].imshow(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
+    # axes[0, 0].set_title('channel 0')
+    # width = math.ceil(img2D.shape[0] * (7/1024))
+    # image_pred = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    # # Note that in prostate158 pz is 2 and tz is 1, while in picai pz is 1 and tz is 2, so need to flip the gt here
+    # image_gt = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1], zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
     lesion_dice = compute_dice(lesion_prev_masks.int(), lesion_gt2D[0])
     pz_dice = compute_dice(zone_prev_masks[0].int(), zone_gt2D[1])
     tz_dice = compute_dice(zone_prev_masks[1].int(), zone_gt2D[0])
     gland_dice = compute_dice(gland_prev_masks.int(), gland_gt2D[0])
-    fig.suptitle(f'lesion_dice: {lesion_dice}, pz_dice: {pz_dice}, tz_dice: {tz_dice}, gland_dice: {gland_dice}')
-    axes[0, 1].imshow(image_pred)
-    axes[0, 1].set_title('predicted results')
-    axes[0, 2].imshow(image_gt)
-    axes[0, 2].set_title('ground truth')
-
-    axes[1, 0].imshow(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
-    axes[1, 0].set_title('channel 1')
-    image_pred = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
-                             zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
-    image_gt = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
-                           zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
-    axes[1, 1].imshow(image_pred)
-    axes[1, 1].set_title('predicted results')
-    axes[1, 2].imshow(image_gt)
-    axes[1, 2].set_title('ground truth')
-
-    axes[2, 0].imshow(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
-    axes[2, 0].set_title('channel 2')
-    image_pred = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
-                             zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
-    image_gt = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
-                           zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
-    axes[2, 1].imshow(image_pred)
-    axes[2, 1].set_title('predicted results')
-    axes[2, 2].imshow(image_gt)
-    axes[2, 2].set_title('ground truth')
-
-    plt.savefig(os.path.join(save_path, 'plots', f'slice_{count}'))
+    # fig.suptitle(f'lesion_dice: {lesion_dice}, pz_dice: {pz_dice}, tz_dice: {tz_dice}, gland_dice: {gland_dice}')
+    # axes[0, 1].imshow(image_pred)
+    # axes[0, 1].set_title('predicted results')
+    # axes[0, 2].imshow(image_gt)
+    # axes[0, 2].set_title('ground truth')
+    #
+    # axes[1, 0].imshow(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
+    # axes[1, 0].set_title('channel 1')
+    # image_pred = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
+    #                          zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    # image_gt = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
+    #                        zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
+    # axes[1, 1].imshow(image_pred)
+    # axes[1, 1].set_title('predicted results')
+    # axes[1, 2].imshow(image_gt)
+    # axes[1, 2].set_title('ground truth')
+    #
+    # axes[2, 0].imshow(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
+    # axes[2, 0].set_title('channel 2')
+    # image_pred = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
+    #                          zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    # image_gt = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
+    #                        zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
+    # axes[2, 1].imshow(image_pred)
+    # axes[2, 1].set_title('predicted results')
+    # axes[2, 2].imshow(image_gt)
+    # axes[2, 2].set_title('ground truth')
+    #
+    # plt.savefig(os.path.join(save_path, 'plots', f'slice_{count}'))
 
     return lesion_dice, pz_dice, tz_dice, gland_dice
 
@@ -336,14 +337,26 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
     # net = DataParallel(net)
     plot_path = os.path.join(log_dir, 'plots')
     os.makedirs(plot_path, exist_ok=True)
-    val_transformer = transforms.Compose([
-        Normalize(),
-        # tio.CropOrPad(target_shape=(32, 128, 128)),
-        To_Tensor(num_class=2, input_channel=3)
-    ])
+    if model_name == ModelName.swin_unetr:
+        val_transformer = transforms.Compose([
+            ScaleIntensityD(keys=["ct"]),
+            ResizeD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"],
+                    spatial_size=(32 if model_name == ModelName.swin_unetr else 24, image_size, image_size),
+                    mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),
+            # Resize the ct to 128x128x64
+            ToTensorD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"])
+        ])
+    else:
+        val_transformer = transforms.Compose([
+            Normalize(),
+            # tio.CropOrPad(target_shape=(32, 128, 128)),
+            To_Tensor(num_class=2, input_channel=3)
+        ])
 
-    val_dataset = MultiLevelDataGenerator(val_path, 'val', image_size, num_class=2, transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
-
+    val_dataset = MultiLevel3DDataGenerator(val_path, 'random', image_size, num_class=2,
+                                                        transform=val_transformer, zone_pid=zone_pid,
+                                                        gland_pid=gland_pid,
+                                                        lesion_pid=lesion_pid) if model_name == ModelName.swin_unetr else MultiLevelDataGenerator(val_path, 'val', image_size, num_class=2, transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
     val_loader = DataLoader(
         val_dataset,
         batch_size=1,
@@ -351,9 +364,7 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
         num_workers=0,
         pin_memory=True
     )
-    count = 0
 
-    dice_dict = {}
     lesion_dices = []
     positive_lesion_dices = []
     pz_dices = []
@@ -361,7 +372,7 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
     gland_dices = []
     with torch.no_grad():
         for step, (sample, pid, slice) in enumerate(tqdm(val_loader)):
-            if os.path.exists(os.path.join(log_dir, 'plots', 'slice_' + pid[0]+'-'+slice[0] + '.png')):
+            if os.path.exists(os.path.join(log_dir, 'plots', 'slice_' + pid[0]+'-'+str(slice[0].item())+'.png' if model_name==ModelName.swin_unetr else 'slice_' + pid[0]+'-'+ slice[0] + '.png')):
                 continue
             lesion_targets = []
             zone_targets = []
@@ -375,9 +386,9 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
                     gland_targets.append(value)
                 elif 'zone' in name:
                     zone_targets.append(value)
-            lesion_target = torch.stack(lesion_targets).permute(1, 0, 2, 3)
-            zone_target = torch.stack(zone_targets).permute(1, 0, 2, 3)
-            gland_target = torch.stack(gland_targets).permute(1, 0, 2, 3)
+            lesion_target = torch.stack(lesion_targets).squeeze(0).squeeze(0).permute(1, 0, 2, 3) if model_name == ModelName.swin_unetr else torch.stack(lesion_targets).permute(1, 0, 2, 3)
+            zone_target = torch.stack(zone_targets).squeeze(1).squeeze(1).permute(1, 0, 2, 3) if model_name == ModelName.swin_unetr else torch.stack(zone_targets).permute(1, 0, 2, 3)
+            gland_target = torch.stack(gland_targets).squeeze(0).squeeze(0).permute(1, 0, 2, 3) if model_name == ModelName.swin_unetr else torch.stack(gland_targets).permute(1, 0, 2, 3)
 
             data = data.to(device)
             lesion_target = lesion_target.to(device)
@@ -414,15 +425,24 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
             #
             #     # aggregate all validation evaluations
             #     lesion_results.append(y_list)
-            lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), log_dir, pid[0]+'-'+slice[0])
-            lesion_dices.append(lesion_dice)
-            pz_dices.append(pz_dice)
-            tz_dices.append(tz_dice)
-            gland_dices.append(gland_dice)
-            if lesion_target.max() > 0:
-                positive_lesion_dices.append(lesion_dice)
-            dice_dict[pid[0] if isinstance(pid, list) else pid] = [lesion_dice, pz_dice, tz_dice, gland_dice]
-            count += 1
+            if model_name==ModelName.swin_unetr:
+                for id, img in enumerate(data.squeeze(0).permute(1,0,2,3)):
+                    lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(
+                        img.permute(1, 2, 0),lesion_output.squeeze(0)[id], zone_output.squeeze(0)[:,id], gland_output.squeeze(0)[id], lesion_target[id], zone_target[id], gland_target[id], log_dir, pid[0]+'-'+str(id))
+                    lesion_dices.append(lesion_dice)
+                    pz_dices.append(pz_dice)
+                    tz_dices.append(tz_dice)
+                    gland_dices.append(gland_dice)
+                    if lesion_target[id].max() > 0:
+                        positive_lesion_dices.append(lesion_dice)
+            else:
+                lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), log_dir, pid[0]+'-'+slice[0])
+                lesion_dices.append(lesion_dice)
+                pz_dices.append(pz_dice)
+                tz_dices.append(tz_dice)
+                gland_dices.append(gland_dice)
+                if lesion_target.max() > 0:
+                    positive_lesion_dices.append(lesion_dice)
     lesion_mean_dice = torch.Tensor(lesion_dices).mean()
     positive_lesion_mean_dice = torch.Tensor(positive_lesion_dices).mean()
     pz_mean_dice = torch.Tensor(pz_dices).mean()
@@ -650,19 +670,16 @@ def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, acti
     os.system(f'cd {log_dir} && touch result.txt && echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
 
 
-
-
-
 if __name__ == '__main__':
     PHASE = 'seg'
 
-    model_name = ModelName.unet
+    model_name = ModelName.swin_unetr
 
     mode = 'normal'
     dataset = '158'
     # dataset = 'picai'
 
-    is_post_process = True
+    is_post_process = False
     threshold = 0.5
     if model_name == ModelName.unet:
         activation = False
@@ -720,13 +737,13 @@ if __name__ == '__main__':
     # )
 
 
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'UNet_Focal_Unified_equal_rate_batch_70_tumorsplit_0.001_0.97_weighted_loss_image_256_combined_label__valmode_3d_lr_0.0001_weight_decay_0.001')
+    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'Swin-UNETR_Focal_Unified_equal_rate_0.8_weighted_loss_combined_label_lr_0.0001_weight_decay_0.001')
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    log_dir = f'./new_log/eval/UNet_Focal_Unified_equal_rate_batch_70_tumorsplit_0.001_0.97_weighted_loss_image_256_combined_label__valmode_3d_lr_0.0001_weight_decay_0.001_threshold_{threshold}_dataset_{dataset}'
+    log_dir = f'./new_log/eval/Swin-UNETR_Focal_Unified_equal_rate_0.8_weighted_loss_combined_label_lr_0.0001_weight_decay_0.001_threshold_{threshold}_dataset_{dataset}'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
-        PATH_DIR = './dataset/lesion_segdata_158/data_2d'
+        PATH_DIR = './dataset/lesion_segdata_158/data_3d' if model_name == ModelName.swin_unetr else './dataset/lesion_segdata_158/data_2d'
         PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
         # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
         plot_eval_multi_level(net, model_name, PATH_LIST, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, threshold, image_size=image_size, dataset=dataset)

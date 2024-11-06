@@ -25,6 +25,7 @@ class ModelName(Enum):
     unet = 'UNet'
     itunet = 'ITUNet'
     samcnn = 'SAMCNN'
+    masam = 'MASAM'
 
 
 def calculate_max_tumor_distance(mask, spacing):
