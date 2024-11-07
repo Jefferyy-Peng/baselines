@@ -386,7 +386,7 @@ class MultiLevelDataGenerator(Dataset):
         gland_count = None if not self.gland_pid else self.gland_pid[lesion_pid]
         # use zone_segdata_all for all dataq
         zone_seg = torch.Tensor(hdf5_reader(path.replace(next((x for x in path.split('/') if 'lesion_segdata' in x), None), 'zone_segdata_158').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg')) if '_158' in path else torch.Tensor(hdf5_reader(path.replace(next((x for x in path.split('/') if 'lesion_segdata' in x), None), 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
-        gland_seg = torch.zeros_like(lesion_seg) if not self.gland_pid else torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[5], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
+        gland_seg = torch.zeros_like(lesion_seg) if not self.gland_pid else torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
         lesion_seg = create_binary_masks(lesion_seg)
         zone_seg = create_binary_masks_zone(zone_seg)
         gland_seg = create_binary_masks(gland_seg)
@@ -573,7 +573,7 @@ class MultiLevel3DDataGenerator(Dataset, Randomizable):
         gland_count = None if not self.gland_pid else self.gland_pid[lesion_pid]
         # use zone_segdata_all for all data
         zone_seg = torch.Tensor(hdf5_reader(path.replace(next((x for x in path.split('/') if 'lesion_segdata' in x), None), 'zone_segdata_158').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg')) if '_158' in path else torch.Tensor(hdf5_reader(path.replace(next((x for x in path.split('/') if 'lesion_segdata' in x), None), 'zone_segdata_all').replace('/'+str(lesion_count), '/'+str(zone_count)), 'seg'))
-        gland_seg = torch.zeros_like(lesion_seg) if not self.gland_pid else torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[5], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
+        gland_seg = torch.zeros_like(lesion_seg) if not self.gland_pid else torch.Tensor(hdf5_reader(path.replace(PATH_DIR.split('/')[2], 'gland_segdata').replace('/'+str(lesion_count), '/'+str(gland_count)), 'seg'))
         lesion_seg = create_binary_masks(lesion_seg)
         zone_seg = create_binary_masks_zone(zone_seg)
         gland_seg = create_binary_masks(gland_seg)

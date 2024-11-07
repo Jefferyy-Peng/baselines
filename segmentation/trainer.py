@@ -35,8 +35,8 @@ from model import itunet_2d
 from MedSAMAuto import MedSAMAUTO, MedSAMAUTOMULTI, MedSAMAUTOCNN
 from config import PATH_DIR
 from segment_anything.modeling import MaskDecoder, TwoWayTransformer
-from segmentation.lora_image_encoder import LoRA_Sam
-from segmentation.segment_anything_from_MASAM.build_sam import sam_model_registry_MASAM
+from lora_image_encoder import LoRA_Sam
+from segment_anything_from_MASAM.build_sam import sam_model_registry_MASAM
 from utils import Normalize_2d
 from eval_utils import search_ckpt_path
 from utils import dfs_remove_weight, poly_lr, compute_results_detect, plot_segmentation2D, ModelName
@@ -71,7 +71,7 @@ def compute_results(logits, target, results, val_mode='2d'):
                              [target[:, i, :, :] for i in range(target.shape[1])] if val_mode=='2d' else [target[i, :, :, :] for i in range(target.shape[0])]):
         y_list, *_ = evaluate_case(
             y_det=y_det,
-            y_true=y_true,
+            y_true=y_true.transpose(1,2,0),
         )
 
         # aggregate all validation evaluations
@@ -150,9 +150,9 @@ class SemanticSeg(object):
                 state_dict = torch.load(load_ckpt, map_location=device)['state_dict']
                 self.net.load_state_dict(state_dict)
         elif model_name == ModelName.samcnn:
-            sam_model = sam_model_registry['vit_b'](checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth')
+            sam_model = sam_model_registry['vit_b'](checkpoint='./sam_vit_b_01ec64.pth')
             lora_sam_model = LoRA_Sam(sam_model, 4)
-            multi_mask_decoder = SegDecoderCNN(num_classes=4, num_depth=4)
+            multi_mask_decoder = SegDecoderCNN(num_classes=4, num_depth=2)
             self.net = DataParallel(MedSAMAUTOCNN(
                     image_encoder=lora_sam_model.sam.image_encoder,
                     mask_decoder=multi_mask_decoder,
@@ -175,7 +175,7 @@ class SemanticSeg(object):
         elif model_name == ModelName.masam:
             sam, img_embedding_size = sam_model_registry_MASAM['vit_b'](image_size=self.img_size,
                                                                         num_classes=4,
-                                                                        checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth', pixel_mean=[0., 0., 0.],
+                                                                        checkpoint='./sam_vit_b_01ec64.pth', pixel_mean=[0., 0., 0.],
                                                                         pixel_std=[1., 1., 1.])
 
             self.net = DataParallel(Fact_tt_Sam(sam, 32, s=1.0), device_ids=[0, 1, 2, 3, 4, 5, 6, 7])
@@ -361,8 +361,14 @@ class SemanticSeg(object):
                         ToTensorD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"])
                     ])
                 else:
-                    val_transformer = transforms.Compose(
-                        [Normalize_2d(), To_Tensor()])
+                    val_transformer = transforms.Compose([
+                        Normalize_2d(),
+                        ResizeD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"],
+                                spatial_size=(32 if self.model_name == ModelName.swin_unetr else 24, self.image_size[0],
+                                              self.image_size[1]),
+                                mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),
+                        To_Tensor()
+                    ])
                 val_dataset = MultiLevel3DDataGenerator(val_ap, 'random', self.image_size, num_class=self.num_classes,
                                                         transform=val_transformer, zone_pid=zone_pid,
                                                         gland_pid=gland_pid,

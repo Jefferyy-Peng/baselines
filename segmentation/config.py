@@ -6,10 +6,10 @@ from utils import get_weight_path, ModelName
 
 TRANSFORMER_DEPTH = 24
 MODEL_NAME = ModelName.samcnn
-batch_size = 16
+batch_size = 40
 # dataset = '158'
 dataset = 'picai'
-VERSION = f'{MODEL_NAME.value}_Focal_Unified_equal_rate_batch_{batch_size}_tumorsplit_0.001_mixed_loss_0.8*3-0.97_image_1024_dataset_{dataset}'
+VERSION = f'{MODEL_NAME.value}_Focal_0.97_Unified_equal_rate_batch_{batch_size}_tumorsplit_0.001_image_1024_dataset_{dataset}'
 
 PHASE = 'seg'   # 'seg' or 'detect'
 NUM_CLASSES = 2 if 'seg' in PHASE else 3
@@ -30,8 +30,8 @@ GPU_NUM = len(DEVICE.split(','))
 
 #--------------------------------- mode and data path setting
 if dataset == 'picai':
-  PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d' if MODEL_NAME == ModelName.swin_unetr else '/data/nvme1/meng/picai/lesion_segdata_combined/data_2d'
-  PATH_AP = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d'
+  PATH_DIR = './dataset/lesion_segdata_combined/data_3d' if MODEL_NAME == ModelName.swin_unetr else './dataset/lesion_segdata_combined/data_2d'
+  PATH_AP = './dataset/lesion_segdata_combined/data_3d'
 elif dataset == '158':
   PATH_DIR = './dataset/lesion_segdata_158/data_3d' if MODEL_NAME == ModelName.swin_unetr else './dataset/lesion_segdata_158/data_2d'
   PATH_AP = './dataset/lesion_segdata_158/data_3d'
@@ -48,7 +48,7 @@ INIT_TRAINER = {
   'num_classes':NUM_CLASSES, 
   'n_epoch':160,
   'batch_size':batch_size,
-  'num_workers':8,
+  'num_workers':16,
   'device':'cuda',
   'pre_trained':PRE_TRAINED,
   'ckpt_point':CKPT_POINT,
@@ -68,6 +68,6 @@ SETUP_TRAINER = {
   'log_dir':'./new_log/{}/{}'.format(PHASE,VERSION),
   'phase':PHASE,
   'activation': False if MODEL_NAME == ModelName.unet else True,
-  'val_mode': '3d',
+  'val_mode': '2d',
   'resume': resume
   }
