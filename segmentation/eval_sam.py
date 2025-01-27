@@ -349,7 +349,7 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
     lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
     # use zone_segdata_all for all data
     zone_pid = pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
-    gland_pid = pickle.load(open('./dataset/gland_segdata/gland_pid.p', 'rb'))
+    gland_pid = pickle.load(open('./dataset/gland_segdata/lesion_pid.p', 'rb'))
 
     state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
 

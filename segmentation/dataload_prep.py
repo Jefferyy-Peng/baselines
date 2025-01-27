@@ -14,7 +14,7 @@ output_path = './dataset/combined/data_2d'
 os.makedirs(output_path, exist_ok=True)
 
 lesion_pids = pickle.load(open(os.path.join(root, 'lesion_pid.p'), 'rb'))
-gland_pids = pickle.load(open(os.path.join(gland_path, 'gland_pid.p'), 'rb'))
+gland_pids = pickle.load(open(os.path.join(gland_path, 'lesion_pid.p'), 'rb'))
 zone_pids = pickle.load(open(os.path.join(zone_path, 'zone_pid.p'), 'rb'))
 
 path_list = os.listdir(os.path.join(root, 'data_2d'))

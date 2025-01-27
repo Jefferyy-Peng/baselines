@@ -1,1 +1,0 @@
-auc: nan, ap: 0.622371759196898, score: nan

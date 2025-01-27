@@ -3,6 +3,7 @@ import random
 from pathlib import Path
 from typing import Union
 import cv2
+from torchvision import transforms
 
 import h5py
 import numpy as np
@@ -10,10 +11,6 @@ import torch
 from matplotlib import pyplot as plt
 from picai_eval.eval import evaluate_case
 from skimage.metrics import hausdorff_distance
-import pydensecrf.densecrf as dcrf
-
-from pydensecrf.utils import compute_unary, create_pairwise_bilateral,\
-         create_pairwise_gaussian, softmax_to_unary, unary_from_softmax
 
 from eval_utils import extract_lesion_candidates
 from scipy.spatial.distance import cdist
@@ -26,6 +23,7 @@ class ModelName(Enum):
     itunet = 'ITUNet'
     samcnn = 'SAMCNN'
     masam = 'MASAM'
+    samed = 'SAMed'
 
 
 def calculate_max_tumor_distance(mask, spacing):
@@ -58,75 +56,7 @@ def calculate_max_tumor_distance(mask, spacing):
 
     return max_distance
 
-def get_crf_img(inputs, outputs):
-    for i in range(outputs.shape[0]):
-        img = inputs[i]
-        softmax_prob = outputs[i]
-        unary = unary_from_softmax(softmax_prob)
-        unary = np.ascontiguousarray(unary)
-        d = dcrf.DenseCRF(img.shape[0] * img.shape[1], 2)
-        d.setUnaryEnergy(unary)
-        feats = create_pairwise_gaussian(sdims=(10,10), shape=img.shape[:2])
-        d.addPairwiseEnergy(feats, compat=3, kernel=dcrf.DIAG_KERNEL,
-                            normalization=dcrf.NORMALIZE_SYMMETRIC)
-        feats = create_pairwise_bilateral(sdims=(50,50), schan=(20,20,20),
-                                          img=img, chdim=2)
-        d.addPairwiseEnergy(feats, compat=10, kernel=dcrf.DIAG_KERNEL,
-                            normalization=dcrf.NORMALIZE_SYMMETRIC)
-        Q = d.inference(5)
-        res = np.argmax(Q, axis=0).reshape((img.shape[0], img.shape[1]))
-        if i == 0:
-            crf = np.expand_dims(res,axis=0)
-        else:
-            res = np.expand_dims(res,axis=0)
-            crf = np.concatenate((crf,res),axis=0)
-    return crf
 
-def post_process(output_root, inputs, outputs, input_path=None,
-                 crf_flag=True, erode_dilate_flag=True,
-                 save=True, overlap=True):
-    inputs = (np.array(inputs.squeeze()).astype(np.float32)) * 255
-    inputs = np.expand_dims(inputs, axis=3)
-    inputs = np.concatenate((inputs,inputs,inputs), axis=3)
-    outputs = np.array(outputs)
-
-    # Conditional Random Field
-    if crf_flag:
-        outputs = get_crf_img(inputs, outputs)
-    else:
-        outputs = outputs.argmax(1)
-
-    # Erosion and Dilation
-    if erode_dilate_flag:
-        outputs = erode_dilate(outputs, kernel_size=7)
-    if save == False:
-        return outputs
-
-    outputs = outputs*255
-    for i in range(outputs.shape[0]):
-        path = input_path[i].split('/')
-        output_folder = os.path.join(output_root, path[-2])
-        try:
-            os.mkdir(output_folder)
-        except:
-            pass
-        output_path = os.path.join(output_folder, path[-1])
-        if overlap:
-            img = outputs[i]
-            img = np.expand_dims(img, axis=2)
-            zeros = np.zeros(img.shape)
-            img = np.concatenate((zeros,zeros,img), axis=2)
-            img = np.array(img).astype(np.float32)
-            img = inputs[i] + img
-            if img.max() > 0:
-                img = (img/img.max())*255
-            else:
-                img = (img/1) * 255
-            cv2.imwrite(output_path, img)
-        else:
-            img = outputs[i]
-            cv2.imwrite(output_path, img)
-    return None
 
 def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=None):
     """
@@ -242,6 +172,33 @@ class Normalize_2d(object):
                 new_sample[key] = ct
             else:
                 new_sample[key] = value
+        return new_sample
+
+class Resize_2d(object):
+    def __init__(self, size):
+        self.size = size
+    def __call__(self, sample):
+        new_sample = {}
+        transform = transforms.Resize(size=self.size)
+        seg_transform = transforms.Resize(size=self.size,
+                                          interpolation=transforms.functional.InterpolationMode.NEAREST)
+        for key, value in sample.items():
+            if key == 'ct':
+                ct = value
+                if isinstance(ct, np.ndarray):
+                    ct = torch.tensor(ct, dtype=torch.float32)
+                new_ct = []
+                for j in range(ct.shape[1]):
+                    new_ct.append(transform(ct[:, j]))
+                new_sample[key] = torch.stack(new_ct, dim=1)
+            else:
+                seg = value
+                if isinstance(seg, np.ndarray):
+                    seg = torch.tensor(seg, dtype=torch.uint8)
+                new_seg = []
+                for j in range(seg.shape[1]):
+                    new_seg.append(seg_transform(seg[:, j]))
+                new_sample[key] = torch.stack(new_seg, dim=1)
         return new_sample
 
 def hdf5_reader(data_path, key):

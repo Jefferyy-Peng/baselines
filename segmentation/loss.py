@@ -9,7 +9,7 @@ from utils import ModelName
 class FocalLoss(nn.Module):
     """Focal loss function for binary segmentation."""
 
-    def __init__(self, alpha=0.97, gamma=2, num_classes=2, activation=True, reduction="mean"):
+    def __init__(self, alpha=0.8, gamma=2, num_classes=2, activation=True, reduction="mean"):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -39,27 +39,25 @@ class FocalLoss(nn.Module):
 class MixedLoss(nn.Module):
     """Focal loss function for binary segmentation."""
 
-    def __init__(self, alpha=[0.8, 0.8, 0.8, 0.97], gamma=2, num_classes=2, activation=True, reduction="mean"):
+    def __init__(self, alpha=[0.8, 0.85, 0.85, 0.97], gamma=2, num_classes=2, activation=True, reduction="mean"):
         super(MixedLoss, self).__init__()
-        self.alpha = alpha
+        self.alpha = torch.Tensor(alpha).view(1,4,1,1)
         self.gamma = gamma
         self.num_classes = num_classes
         self.reduction = reduction
         self.activation = activation
 
     def forward(self, inputs, targets):
-        self.alpha = torch.Tensor(self.alpha).repeat(targets.shape[0], 1)
-
         if self.activation:
             inputs = torch.sigmoid(inputs)
         ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
+        alpha = self.alpha.to(targets.device)
 
         p_t = inputs * targets + (1 - inputs) * (1 - targets)
         loss = (1 - p_t) ** self.gamma * ce_loss
 
-        if self.alpha >= 0:
-            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-            loss = alpha_t * loss
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        loss = alpha_t * loss
 
         if self.reduction == "mean":
             loss = loss.mean()
@@ -130,7 +128,7 @@ class Deep_Supervised_Loss(nn.Module):
             self.fl.reduction = 'sum'
             return self.fl(input, target)
         elif self.mode == 'Mixed':
-            self.fl.reduction = 'sum'
+            self.mix.reduction = 'sum'
             return self.mix(input, target)
         else:
             raise NotImplementedError

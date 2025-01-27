@@ -48,6 +48,40 @@ from segmentation.segment_anything_from_SAMed import sam_model_registry_SAMed
 from segmentation.utils import compute_results_detect, ModelName, Normalize_2d, Resize_2d
 from segmentation.eval_utils import erode_dilate, search_ckpt_path
 
+class MRIWindowingTransform:
+    def __init__(self, window_low1, window_low2, window_high1, window_high2):
+        """
+        Initializes the windowing transform.
+
+        Args:
+            window_center (float): Center of the intensity window.
+            window_width (float): Width of the intensity window.
+        """
+        self.window_low1 = window_low1
+        self.window_low2 = window_low2
+        self.window_high1 = window_high1
+        self.window_high2 = window_high2
+
+    def __call__(self, sample):
+        """
+        Apply windowing to the image.
+
+        Args:
+            image (torch.Tensor or np.ndarray): Input MRI image.
+
+        Returns:
+            torch.Tensor: Windowed and normalized image.
+        """
+        # Apply windowing
+        windowed_image = []
+        windowed_image.append(np.clip(sample['ct'][0], self.window_low1, self.window_high1))
+        # windowed_image.append(np.clip(sample['ct'][0], self.window_low1, self.window_high1))
+        # windowed_image.append(np.clip(sample['ct'][0], self.window_low1, self.window_high1))
+        windowed_image.append(np.clip(sample['ct'][1], self.window_low2, self.window_high2))
+        windowed_image.append(np.clip(sample['ct'][2], 0, 2000))
+        sample['ct'] = np.stack(windowed_image)
+
+        return sample
 
 def set_seed(seed_value):
     """Set seed for reproducibility."""
@@ -220,46 +254,46 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
         """
     os.makedirs(save_path, exist_ok=True)
     # Determine the number of slices based on the selected axis
-    # fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(18, 18))
-    # axes[0, 0].imshow(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
-    # axes[0, 0].set_title('channel 0')
-    # width = math.ceil(img2D.shape[0] * (7/1024))
-    # image_pred = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
-    # # Note that in prostate158 pz is 2 and tz is 1, while in picai pz is 1 and tz is 2, so need to flip the gt here
-    # image_gt = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1], zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
+    fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(18, 18))
+    axes[0, 0].imshow(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
+    axes[0, 0].set_title('channel 0')
+    width = math.ceil(img2D.shape[0] * (7/1024))
+    image_pred = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0], zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    # Note that in QIN pz is 1 and tz is 2, while in picai pz is 1 and tz is 2
+    image_gt = add_contour(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[0], zone_gt2D[1], gland_gt2D.squeeze(0), contour_thickness=width)
     lesion_dice = compute_dice(lesion_prev_masks.int(), lesion_gt2D[0])
-    pz_dice = compute_dice(zone_prev_masks[0].int(), zone_gt2D[1])
-    tz_dice = compute_dice(zone_prev_masks[1].int(), zone_gt2D[0])
+    pz_dice = compute_dice(zone_prev_masks[0].int(), zone_gt2D[0])
+    tz_dice = compute_dice(zone_prev_masks[1].int(), zone_gt2D[1])
     gland_dice = compute_dice(gland_prev_masks.int(), gland_gt2D[0])
-    # fig.suptitle(f'lesion_dice: {lesion_dice}, pz_dice: {pz_dice}, tz_dice: {tz_dice}, gland_dice: {gland_dice}')
-    # axes[0, 1].imshow(image_pred)
-    # axes[0, 1].set_title('predicted results')
-    # axes[0, 2].imshow(image_gt)
-    # axes[0, 2].set_title('ground truth')
-    #
-    # axes[1, 0].imshow(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
-    # axes[1, 0].set_title('channel 1')
-    # image_pred = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
-    #                          zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
-    # image_gt = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
-    #                        zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
-    # axes[1, 1].imshow(image_pred)
-    # axes[1, 1].set_title('predicted results')
-    # axes[1, 2].imshow(image_gt)
-    # axes[1, 2].set_title('ground truth')
-    #
-    # axes[2, 0].imshow(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
-    # axes[2, 0].set_title('channel 2')
-    # image_pred = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
-    #                          zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
-    # image_gt = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
-    #                        zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
-    # axes[2, 1].imshow(image_pred)
-    # axes[2, 1].set_title('predicted results')
-    # axes[2, 2].imshow(image_gt)
-    # axes[2, 2].set_title('ground truth')
-    #
-    # plt.savefig(os.path.join(save_path, 'plots', f'slice_{count}'))
+    fig.suptitle(f'lesion_dice: {lesion_dice}, pz_dice: {pz_dice}, tz_dice: {tz_dice}, gland_dice: {gland_dice}')
+    axes[0, 1].imshow(image_pred)
+    axes[0, 1].set_title('predicted results')
+    axes[0, 2].imshow(image_gt)
+    axes[0, 2].set_title('ground truth')
+
+    axes[1, 0].imshow(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
+    axes[1, 0].set_title('channel 1')
+    image_pred = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
+                             zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    image_gt = add_contour(img2D[..., 1].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
+                           zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
+    axes[1, 1].imshow(image_pred)
+    axes[1, 1].set_title('predicted results')
+    axes[1, 2].imshow(image_gt)
+    axes[1, 2].set_title('ground truth')
+
+    axes[2, 0].imshow(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
+    axes[2, 0].set_title('channel 2')
+    image_pred = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_prev_masks, zone_prev_masks[0],
+                             zone_prev_masks[1], gland_prev_masks, contour_thickness=width)
+    image_gt = add_contour(img2D[..., 2].unsqueeze(-1).expand(-1, -1, 3), lesion_gt2D.squeeze(0), zone_gt2D[1],
+                           zone_gt2D[0], gland_gt2D.squeeze(0), contour_thickness=width)
+    axes[2, 1].imshow(image_pred)
+    axes[2, 1].set_title('predicted results')
+    axes[2, 2].imshow(image_gt)
+    axes[2, 2].set_title('ground truth')
+
+    plt.savefig(os.path.join(save_path, 'plots', f'slice_{count}'))
 
     return lesion_dice, pz_dice, tz_dice, gland_dice
 
@@ -326,8 +360,8 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
     lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
     # use zone_segdata_all for all data
-    zone_pid = pickle.load(open('./dataset/zone_segdata_158/zone_pid.p', 'rb')) if dataset == '158' else pickle.load(open('./dataset/zone_segdata_all/zone_pid.p', 'rb'))
-    gland_pid = None if dataset == '158' else pickle.load(open('./dataset/gland_segdata/lesion_pid.p', 'rb'))
+    zone_pid = pickle.load(open('./dataset/zone_segdata_QIN/zone_pid.p', 'rb'))
+    gland_pid = pickle.load(open('./dataset/gland_segdata_QIN/gland_pid.p', 'rb'))
 
     state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
 
@@ -359,6 +393,7 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
         ])
     else:
         val_transformer = transforms.Compose([
+            MRIWindowingTransform(0, 0, 2000, 20000),
             Normalize(),
             # tio.CropOrPad(target_shape=(32, 128, 128)),
             To_Tensor(num_class=2, input_channel=3)
@@ -383,8 +418,8 @@ def plot_eval_multi_level(net, model_name, val_path, ckpt_path, log_dir, device,
     gland_dices = []
     with torch.no_grad():
         for step, (sample, pid, slice) in enumerate(tqdm(val_loader)):
-            if os.path.exists(os.path.join(log_dir, 'plots', 'slice_' + pid[0]+'-'+str(slice[0].item())+'.png' if model_name==ModelName.swin_unetr or model_name == ModelName.masam else 'slice_' + pid[0]+'-'+ slice[0] + '.png')):
-                continue
+            # if os.path.exists(os.path.join(log_dir, 'plots', 'slice_' + pid[0]+'-'+str(slice[0].item())+'.png' if model_name==ModelName.swin_unetr or model_name == ModelName.masam else 'slice_' + pid[0]+'-'+ slice[0] + '.png')):
+            #     continue
             lesion_targets = []
             zone_targets = []
             gland_targets = []
@@ -705,12 +740,12 @@ def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, acti
 
 
 if __name__ == '__main__':
-    PHASE = 'detect'
+    PHASE = 'seg'
 
-    model_name = ModelName.samed
+    model_name = ModelName.medsam
 
     mode = 'normal'
-    dataset = '158'
+    dataset = 'QIN'
     # dataset = 'picai'
 
     is_post_process = True
@@ -790,17 +825,17 @@ if __name__ == '__main__':
     # )
 
 
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'SAMed_Focal_Unified_equal_rate_batch_70_tumorsplit_0.001_image_256_dataset_picai_valmode_3d_lr_0.0001_weight_decay_0.001')
+    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'MedSAMAuto_Focal_Unified_equal_rate_high_weighted_loss_combined_label_lr_0.0001_weight_decay_0.001')
     # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
 
-    log_dir = f'./new_log/eval/SAMed_Focal_Unified_equal_rate_batch_70_tumorsplit_0.001_image_256_dataset_picai_valmode_3d_lr_0.0001_weight_decay_0.001_threshold_{threshold}_dataset_{dataset}'
+    log_dir = f'./new_log/eval/MedSAMAuto_Focal_Unified_equal_rate_high_weighted_loss_combined_label_lr_0.0001_weight_decay_0.001_threshold_{threshold}_dataset_{dataset}_cliped'
     # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
     if PHASE == 'seg':
-        PATH_DIR = './dataset/lesion_segdata_158/data_3d' if model_name == ModelName.swin_unetr or model_name == ModelName.masam else './dataset/lesion_segdata_158/data_2d'
+        PATH_DIR = './dataset/lesion_segdata_QIN/data_3d' if model_name == ModelName.swin_unetr or model_name == ModelName.masam else './dataset/lesion_segdata_QIN/data_2d'
         PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
         # train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
         plot_eval_multi_level(net, model_name, PATH_LIST, ckpt_path, log_dir, 'cuda:0', activation, False, threshold, image_size=image_size, dataset=dataset)
     else:
-        PATH_AP = './dataset/lesion_segdata_158/data_3d'
+        PATH_AP = './dataset/lesion_segdata_QIN/data_3d'
         AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
         plot_eval_detect(net, model_name, AP_LIST, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, threshold, mode, image_size=image_size, dataset=dataset)

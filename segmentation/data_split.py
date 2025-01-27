@@ -32,7 +32,7 @@ from utils import get_cross_validation_by_sample, Normalize_2d
 
 from utils import compute_results_detect, post_process, calculate_max_tumor_distance
 
-PATH_AP = './dataset/lesion_segdata_combined/data_3d'
+PATH_AP = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d'
 AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
 train_path, val_path = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
 
@@ -47,7 +47,7 @@ val_loader = DataLoader(
     val_dataset,
     batch_size=1,
     shuffle=False,
-    num_workers=32,
+    num_workers=8,
     pin_memory=True
 )
 small_list = []
@@ -58,14 +58,15 @@ for step, (sample, path) in enumerate(tqdm(val_loader)):
     target = sample['seg'].squeeze().numpy()
 
     max_dist = calculate_max_tumor_distance(target, [3.0, 0.5, 0.5])
-    if max_dist <= 10:
-        small_list.append(path[0])
-    else:
-        large_list.append(path[0])
+    if max_dist != 0:
+        if max_dist <= 10:
+            small_list.append(path[0])
+        else:
+            large_list.append(path[0])
 
 dict = {'small': small_list, 'large': large_list}
 
-with open('./dataset/lesion_segdata_combined/data_split.p', 'wb') as f:
+with open('/data/nvme1/meng/picai/lesion_segdata_combined/data_split.p', 'wb') as f:
     pickle.dump(dict, f)
 
     # data = data.squeeze().transpose(1, 0)

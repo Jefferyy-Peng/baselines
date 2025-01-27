@@ -37,7 +37,8 @@ from config import PATH_DIR
 from segment_anything.modeling import MaskDecoder, TwoWayTransformer
 from lora_image_encoder import LoRA_Sam
 from segment_anything_from_MASAM.build_sam import sam_model_registry_MASAM
-from utils import Normalize_2d
+from segment_anything_from_SAMed.build_sam import sam_model_registry_SAMed
+from utils import Normalize_2d, Resize_2d
 from eval_utils import search_ckpt_path
 from utils import dfs_remove_weight, poly_lr, compute_results_detect, plot_segmentation2D, ModelName
 from monai.networks.nets import SwinUNETR
@@ -52,6 +53,7 @@ from monai.transforms import (
     ToTensorD,
 )
 from TransUNet import VisionTransformer, CONFIGS
+from einops import rearrange
 
 warnings.filterwarnings('ignore')
 
@@ -71,7 +73,7 @@ def compute_results(logits, target, results, val_mode='2d'):
                              [target[:, i, :, :] for i in range(target.shape[1])] if val_mode=='2d' else [target[i, :, :, :] for i in range(target.shape[0])]):
         y_list, *_ = evaluate_case(
             y_det=y_det,
-            y_true=y_true.transpose(1,2,0),
+            y_true=y_true.transpose(1,2,0) if val_mode == '2d' else y_true,
         )
 
         # aggregate all validation evaluations
@@ -81,10 +83,10 @@ def compute_results(logits, target, results, val_mode='2d'):
 class SemanticSeg(object):
     def __init__(self,lr=1e-3,n_epoch=1,channels=3,num_classes=2, input_shape=(384,384),batch_size=6,num_workers=0,
                   device=None,pre_trained=False,ckpt_point=True,weight_path=None,weight_decay=0.0001,
-                  use_fp16=False,transformer_depth = 18, model_name = 'MedSAMAuto', image_size=(384,384),load_ckpt=None, finetune=False):
+                  use_fp16=False,transformer_depth = 18, model_name = 'MedSAMAuto', image_size=(384,384),load_ckpt=None, finetune_stepwise=False):
         super(SemanticSeg,self).__init__()
         self.lr = lr
-        self.finetune = finetune
+        self.finetune_stepwise = finetune_stepwise
         self.n_epoch = n_epoch
         self.channels = channels
         self.num_classes = num_classes
@@ -139,18 +141,18 @@ class SemanticSeg(object):
                 iou_head_depth=3,
                 iou_head_hidden_dim=256,
             )
-            self.net = DataParallel(MedSAMAUTOMULTI(
+            self.net = MedSAMAUTOMULTI(
                     image_encoder=sam_model.image_encoder,
                     mask_decoder=multi_mask_decoder,
                     prompt_encoder=sam_model.prompt_encoder,
                     dense_encoder=dense_model,
                     image_size=512
-                ), device_ids=[0, 1, 2, 3])
-            if finetune:
+                )
+            if finetune_stepwise:
                 state_dict = torch.load(load_ckpt, map_location=device)['state_dict']
                 self.net.load_state_dict(state_dict)
         elif model_name == ModelName.samcnn:
-            sam_model = sam_model_registry['vit_b'](checkpoint='./sam_vit_b_01ec64.pth')
+            sam_model = sam_model_registry['vit_b'](checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth')
             lora_sam_model = LoRA_Sam(sam_model, 4)
             multi_mask_decoder = SegDecoderCNN(num_classes=4, num_depth=2)
             self.net = DataParallel(MedSAMAUTOCNN(
@@ -167,18 +169,26 @@ class SemanticSeg(object):
                           )
             )
         elif model_name == ModelName.unet:
-            self.net = DataParallel(torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
-                                      in_channels=3, out_channels=4 , init_features=32, pretrained=False))
+            self.net = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+                                      in_channels=3, out_channels=4 , init_features=32, pretrained=False)
         elif model_name == ModelName.itunet:
             self.net = DataParallel(itunet_2d(n_channels=self.channels, n_classes=4,
                                  image_size=self.image_size, transformer_depth=self.transformer_depth))
         elif model_name == ModelName.masam:
-            sam, img_embedding_size = sam_model_registry_MASAM['vit_b'](image_size=self.img_size,
-                                                                        num_classes=4,
-                                                                        checkpoint='./sam_vit_b_01ec64.pth', pixel_mean=[0., 0., 0.],
+            sam, img_embedding_size = sam_model_registry_MASAM['vit_b'](image_size=self.image_size[0],
+                                                                        num_classes=3,
+                                                                        checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth', pixel_mean=[0., 0., 0.],
                                                                         pixel_std=[1., 1., 1.])
 
-            self.net = DataParallel(Fact_tt_Sam(sam, 32, s=1.0), device_ids=[0, 1, 2, 3, 4, 5, 6, 7])
+            self.net = DataParallel(Fact_tt_Sam(sam, 32, s=1.0), device_ids=[5, 6, 7, 2])
+        elif model_name == ModelName.samed:
+            sam, img_embedding_size = sam_model_registry_SAMed['vit_b'](image_size=self.image_size[0],
+                                                                        num_classes=3,
+                                                                        checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth',
+                                                                        pixel_mean=[0., 0., 0.],
+                                                                        pixel_std=[1., 1., 1.])
+
+            self.net = LoRA_Sam(sam, r=4)
         elif model_name == ModelName.transunet:
             self.net = DataParallel(VisionTransformer(con))
         # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
@@ -234,11 +244,11 @@ class SemanticSeg(object):
                 plot_segmentation2D(data.squeeze(0).permute(1, 2, 0).detach().cpu(), output.squeeze(0)[0].detach().cpu(), target.squeeze(0)[0].detach().cpu(), plot_path, count)
                 count += 1
 
-    def trainer(self, train_path,val_path,val_ap, cur_fold,output_dir=None,log_dir=None,phase = 'seg', activation=True, val_mode='2d', resume=None):
+    def trainer(self, train_path,val_path,val_ap, cur_fold,output_dir=None,log_dir=None,phase = 'seg', activation=True, val_mode='2d', resume=None, loss_mode='Focal'):
 
-        torch.manual_seed(0)
-        np.random.seed(0)
-        torch.cuda.manual_seed_all(0)
+        torch.manual_seed(1)
+        np.random.seed(1)
+        torch.cuda.manual_seed_all(1)
         print('Device:{}'.format(self.device))
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.enabled = True
@@ -268,18 +278,18 @@ class SemanticSeg(object):
 
         net = self.net
         lr = self.lr
-        loss = Deep_Supervised_Loss(mode='Focal', activation=activation, model_name=self.model_name)
+        loss = Deep_Supervised_Loss(mode=loss_mode, activation=activation, model_name=self.model_name)
 
         if len(self.device.split(',')) > 1:
             net = DataParallel(net)
 
         lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
         zone_pid = pickle.load(open(os.path.join(PATH_DIR, '../../zone_segdata_all/zone_pid.p'), 'rb'))
-        gland_pid = pickle.load(open(os.path.join(PATH_DIR, '../../gland_segdata/gland_pid.p'), 'rb'))
-        if self.model_name == ModelName.swin_unetr:
+        gland_pid = pickle.load(open(os.path.join(PATH_DIR, '../../gland_segdata/lesion_pid.p'), 'rb'))
+        if self.model_name == ModelName.swin_unetr or self.model_name == ModelName.masam:
             train_transformer = transforms.Compose([
                 ScaleIntensityD(keys=["ct"]),
-                ResizeD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"], spatial_size=(32, self.image_size[0], self.image_size[1]), mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),  # Resize the ct to 128x128x64
+                ResizeD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"], spatial_size=(32 if self.model_name == ModelName.swin_unetr else 24, self.image_size[0], self.image_size[1]), mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),  # Resize the ct to 128x128x64
                 RandFlipD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"], spatial_axis=0, prob=0.5),  # Random flip along x-axis
                 RandRotateD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"], range_x=0.4, range_y=0.4, range_z=0.4, prob=0.5, mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),  # Random rotate
                 ToTensorD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"])
@@ -298,7 +308,7 @@ class SemanticSeg(object):
             val_transformer = transforms.Compose([
                 ScaleIntensityD(keys=["ct"]),
                 ResizeD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"],
-                        spatial_size=(32, self.image_size[0], self.image_size[1]),
+                        spatial_size=(32 if self.model_name == ModelName.swin_unetr else 24, self.image_size[0], self.image_size[1]),
                         mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),  # Resize the ct to 128x128x64
                 ToTensorD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"])
             ])
@@ -351,24 +361,15 @@ class SemanticSeg(object):
                     pin_memory=True,
                 )
             else:
-                if self.model_name == ModelName.swin_unetr:
-                    val_transformer = transforms.Compose([
-                        ScaleIntensityD(keys=["ct"]),
-                        ResizeD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"],
-                                spatial_size=(32 if self.model_name == ModelName.swin_unetr else 24, self.image_size[0], self.image_size[1]),
-                                mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),
-                        # Resize the ct to 128x128x64
-                        ToTensorD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"])
-                    ])
-                else:
-                    val_transformer = transforms.Compose([
-                        Normalize_2d(),
-                        ResizeD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"],
-                                spatial_size=(32 if self.model_name == ModelName.swin_unetr else 24, self.image_size[0],
-                                              self.image_size[1]),
-                                mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),
-                        To_Tensor()
-                    ])
+                val_transformer = transforms.Compose([
+                    Normalize_2d(),
+                    # ResizeD(keys=["ct", "lesion_seg_0", "zone_seg_0", "zone_seg_1", "gland_seg_0"],
+                    #         spatial_size=(32 if self.model_name == ModelName.swin_unetr else 24, self.image_size[0],
+                    #                       self.image_size[1]),
+                    #         mode=("trilinear", "nearest", "nearest", "nearest", "nearest")),
+                    Resize_2d(self.image_size[0]),
+                    To_Tensor()
+                ])
                 val_dataset = MultiLevel3DDataGenerator(val_ap, 'random', self.image_size, num_class=self.num_classes,
                                                         transform=val_transformer, zone_pid=zone_pid,
                                                         gland_pid=gland_pid,
@@ -383,7 +384,7 @@ class SemanticSeg(object):
                 )
         if resume:
             ckpt_file = search_ckpt_path(resume)
-            start_epoch = int(ckpt_file.split('epoch:')[1].split('-')[0])
+            self.start_epoch = int(ckpt_file.split('epoch:')[1].split('-')[0]) + 1
             state_dict = torch.load(os.path.join(resume, ckpt_file), map_location=self.device)['state_dict']
             net.load_state_dict(state_dict)
             resume_gland_dice = float(ckpt_file.split('gland_val_dice:')[1].split('-')[0])
@@ -407,11 +408,7 @@ class SemanticSeg(object):
         optimizer.param_groups[0]['lr'] = poly_lr(epoch, self.n_epoch, initial_lr = lr)
 
         while epoch < self.n_epoch:
-            if resume:
-                if epoch <= start_epoch:
-                    epoch += 1
-                    continue
-            train_loss,gland_train_dice,zone_train_dice,lesion_train_dice = self._train_on_epoch(output_dir, epoch,net,loss,optimizer,train_loader,val_loader, scaler, activation=activation, finetune=self.finetune, val_mode=val_mode)
+            train_loss,gland_train_dice,zone_train_dice,lesion_train_dice = self._train_on_epoch(output_dir, epoch,net,loss,optimizer,train_loader,val_loader, scaler, activation=activation, finetune_stepwise=self.finetune_stepwise, val_mode=val_mode)
             self.writer.add_scalar(
                 'data/train_loss', train_loss, epoch
             )
@@ -422,6 +419,7 @@ class SemanticSeg(object):
             self.writer.add_scalar(
                 'data/train_loss_epochs', train_loss, epoch
             )
+            torch.cuda.empty_cache()
 
             if phase == 'seg':
                 val_loss,gland_val_dice,zone_val_dice,lesion_val_dice, lesion_ap, lesion_auc, lesion_positive_dice = self._val_on_epoch(epoch,net,loss,val_loader, activation=activation, val_mode=val_mode)
@@ -494,11 +492,11 @@ class SemanticSeg(object):
                 print("Early stopping")
                 break
 
-        self.plot_eval(100, val_path, output_dir, log_dir, device='cuda')
+        # self.plot_eval(100, val_path, output_dir, log_dir, device='cuda')
         self.writer.close()
         dfs_remove_weight(output_dir,retain=3)
 
-    def _train_on_epoch(self,output_dir, epoch,net,criterion,optimizer,train_loader, val_loader, scaler, activation=True, plot=False, finetune=False, val_mode='2d'):
+    def _train_on_epoch(self,output_dir, epoch,net,criterion,optimizer,train_loader, val_loader, scaler, activation=True, plot=False, finetune_stepwise=False, val_mode='2d'):
         net.train()
 
         train_loss = AverageMeter()
@@ -510,7 +508,7 @@ class SemanticSeg(object):
         run_dice = RunningDice(labels=range(self.num_classes),ignore_label=-1)
 
         for step, (sample, pid, slice) in enumerate(tqdm(train_loader)):
-            if finetune:
+            if finetune_stepwise:
                 net.train()
             lesion_targets = []
             zone_targets = []
@@ -535,7 +533,7 @@ class SemanticSeg(object):
             lesion_target = torch.stack(lesion_targets)
             zone_target = torch.stack(zone_targets)
             gland_target = torch.stack(gland_targets)
-            if self.model_name == ModelName.swin_unetr:
+            if self.model_name == ModelName.swin_unetr or self.model_name == ModelName.masam:
                 multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).squeeze(2).permute(1, 0, 2, 3, 4)
             else:
                 multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).permute(1, 0, 2, 3)
@@ -544,8 +542,13 @@ class SemanticSeg(object):
             data = data.to(self.device)
             multi_level_targets = multi_level_targets.to(self.device)
 
-            with autocast(self.use_fp16):
-                output = net(data)
+            with (autocast(self.use_fp16)):
+                if self.model_name == ModelName.masam:
+                    output = rearrange(net(data, True, self.image_size[0])['masks'].permute(1,0,2,3).unsqueeze(0), '1 c (b d) h w -> b c d h w', b=multi_level_targets.shape[0])
+                elif self.model_name == ModelName.samed:
+                    output = net(data, True, self.image_size[0])['masks']
+                else:
+                    output = net(data)
                 if isinstance(output,tuple):
                     output = output[0]
                 loss = criterion(output, multi_level_targets)
@@ -586,9 +589,9 @@ class SemanticSeg(object):
             # multi_level_targets = multi_level_targets.detach().cpu().numpy()
             # run_dice.update_matrix(multi_level_targets,output)
 
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
 
-            if self.global_step%1==0:
+            if self.global_step%10==0:
                 # rundice, dice_list = run_dice.compute_dice()
                 # print("Category Dice: ", dice_list)
                 print('epoch:{}/{},step:{},train_loss:{:.5f},gland_train_dice:{:.5f},zone_train_dice:{:.5f},lesion_train_dice:{:.5f},lr:{}'.format(epoch,self.n_epoch, step, loss.item(), gland_train_dice.avg, zone_train_dice.avg, lesion_train_dice.avg, optimizer.param_groups[0]['lr']))
@@ -601,7 +604,7 @@ class SemanticSeg(object):
                 # self.writer.add_scalar('data/lesion_train_dice', lesion_train_dice.avg, self.global_step)
 
             self.global_step += 1
-            if finetune:
+            if finetune_stepwise:
                 if step % 50 == 0 and step != 0:
                     val_loss,gland_val_dice,zone_val_dice,lesion_val_dice, lesion_ap, lesion_auc, lesion_positive_dice = self._val_on_epoch(epoch,net,criterion,val_loader, activation=activation, val_mode=val_mode)
                     print(f'eval epoch,step:{epoch},{step}-gland_dice:{gland_val_dice}-zone_dice:{zone_val_dice}-lesion_ap:{lesion_ap}-lesion_auc:{lesion_auc}')
@@ -682,15 +685,22 @@ class SemanticSeg(object):
                 lesion_target = torch.stack(lesion_targets) if val_mode == '2d' else torch.stack(lesion_targets).squeeze(1).squeeze(1)
                 zone_target = torch.stack(zone_targets) if val_mode == '2d' else torch.stack(zone_targets).squeeze(1).squeeze(1)
                 gland_target = torch.stack(gland_targets) if val_mode == '2d' else torch.stack(gland_targets).squeeze(1).squeeze(1)
-                if self.model_name == ModelName.swin_unetr:
+                if self.model_name == ModelName.swin_unetr or self.model_name == ModelName.masam:
                     multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).squeeze(2).permute(1, 0, 2, 3, 4)
                 else:
                     multi_level_targets = torch.cat([gland_target, zone_target, lesion_target]).permute(1, 0, 2, 3)
 
-                data = data.to(self.device) if val_mode == '2d' else data.squeeze(0).permute(1,0,2,3)
+                data = data.to(self.device) if val_mode == '2d' else data.squeeze(0).permute(1,0,2,3).to(self.device)
                 multi_level_targets = multi_level_targets.to(self.device)
                 with autocast(self.use_fp16):
-                    output = net(data)
+                    if self.model_name == ModelName.masam:
+                        output = rearrange(
+                            net(data, True, self.image_size[0])['masks'].permute(1, 0, 2, 3).unsqueeze(0),
+                            '1 c (b d) h w -> b c d h w', b=multi_level_targets.shape[0])
+                    elif self.model_name == ModelName.samed:
+                        output = net(data, True, self.image_size[0])['masks']
+                    else:
+                        output = net(data)
                     if isinstance(output,tuple):
                         output = output[0]
                 # loss = criterion(output,multi_level_targets[:, -1].unsqueeze(1).float())
@@ -726,7 +736,7 @@ class SemanticSeg(object):
                 output = (logits > 0.5).int().detach().cpu().numpy()  # N*H*W
                 # target = target.detach().cpu().numpy()
                 # run_dice.update_matrix(target,output)
-                if self.model_name == ModelName.swin_unetr:
+                if self.model_name == ModelName.swin_unetr or self.model_name == ModelName.masam:
                     logits = logits[:, -1, :, :, :]
                     target = lesion_target.squeeze(0).squeeze(1).detach().cpu().numpy()
                     preds = []
@@ -745,9 +755,9 @@ class SemanticSeg(object):
                 else:
                     lesion_results = compute_results(logits[:, -1, :, :], lesion_target.detach().cpu().numpy(), lesion_results, val_mode=val_mode) if val_mode == '2d' else compute_results(logits[:, -1, :, :].unsqueeze(0), lesion_target.detach().cpu().numpy(), lesion_results, val_mode=val_mode)
 
-                torch.cuda.empty_cache()
+                # torch.cuda.empty_cache()
 
-                if step % 1 == 0:
+                if step % 10 == 0:
                     # rundice, dice_list = run_dice.compute_dice()
                     # print("Category Dice: ", dice_list)
                     print('Eval epoch:{}/{},step:{},val_loss:{:.5f},gland_val_dice:{:.5f},zone_val_dice:{:.5f},lesion_val_dice:{:.5f}'.format(epoch,self.n_epoch, step, loss.item(), gland_val_dice.avg, zone_val_dice.avg, lesion_val_dice.avg))
@@ -879,7 +889,7 @@ class EarlyStopping(object):
             self.print_and_update(val_score)
             self.counter = 0
 
-    def print_and_update(self, val_score):
+    def  print_and_update(self, val_score):
         '''print_message when validation score decrease.'''
         if self.verbose:
            print(self.monitor, f'optimized ({self.val_score_min:.6f} --> {val_score:.6f}).  Saving model ...')

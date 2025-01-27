@@ -30,8 +30,10 @@ import cv2
 from data_loader import (DataGenerator, Normalize, RandomFlip2D,
                          RandomRotate2D, To_Tensor, MultiLevelDataGenerator, DataGenerator_no_resize,
                          MultiLevel3DDataGenerator)
-from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN
+from segmentation.MedSAMAuto import MedSAMAUTO, MedSAMAUTOZONE, MedSAMAUTOMULTI, MedSAMAUTOCNN, TextEncoder, \
+    MedSAMAUTOMULTIALIGNTYPE2FINE, MedSAMAUTOMULTIALIGNTYPE1
 from segmentation.config import FOLD_NUM, CURRENT_FOLD
+from segmentation.data_loader_new import MultiLevelDataGeneratorAlignDummy
 from segmentation.lora_image_encoder import LoRA_Sam
 from segmentation.model import itunet_2d
 from segmentation.model_single import ModelEmb, SegDecoderCNN
@@ -46,6 +48,7 @@ from segmentation.segment_anything_from_MASAM import sam_model_registry_MASAM
 from segmentation.segment_anything_from_SAMed import sam_model_registry_SAMed
 from segmentation.utils import compute_results_detect, ModelName, Normalize_2d, Resize_2d
 from segmentation.eval_utils import erode_dilate, search_ckpt_path
+from vit import VisionTransformer
 
 
 def set_seed(seed_value):
@@ -207,7 +210,7 @@ def add_contour(original_image, mask_lesion, mask_pz, mask_cz, mask_gland, rando
     # cv2.addWeighted(overlay, alpha, image_copy, 1 - alpha, 0, image_copy)
     return image_copy
 
-def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gland_prev_masks, lesion_gt2D, zone_gt2D, gland_gt2D, save_path, count, image_dice=None):
+def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gland_prev_masks, lesion_gt2D, zone_gt2D, gland_gt2D, count, image_dice=None):
     """
         Plot each slice of a 3D image, its corresponding previous mask, and ground truth mask.
 
@@ -217,7 +220,7 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
         gt3D (numpy.ndarray): The 3D array of ground truth masks of shape (depth, height, width).
         slice_axis (int): The axis along which to slice the image (0=depth, 1=height, 2=width).
         """
-    os.makedirs(save_path, exist_ok=True)
+    # os.makedirs(save_path, exist_ok=True)
     # Determine the number of slices based on the selected axis
     # fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(18, 18))
     # axes[0, 0].imshow(img2D[..., 0].unsqueeze(-1).expand(-1, -1, 3).detach().cpu().numpy())
@@ -256,7 +259,7 @@ def plot_segmentation2D_multilevel(img2D, lesion_prev_masks, zone_prev_masks, gl
     # axes[2, 2].imshow(image_gt)
     # axes[2, 2].set_title('ground truth')
 
-    plt.savefig(os.path.join(save_path, f'slice_{count}'))
+    # plt.savefig(os.path.join(save_path, f'slice_{count}'))
 
     return lesion_dice, pz_dice, tz_dice, gland_dice
 
@@ -319,12 +322,17 @@ def plot_segmentation3D_lesion(img3D, lesion_prev_masks, lesion_gt3D, lesion_ap,
 
     return lesion_dice
 
-def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log_dir, device, activation, is_post_process, threshold, image_size=1024):
+def seg_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, device, activation, is_post_process, threshold, image_size=1024):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
-    lesion_pid = pickle.load(open(os.path.join(PATH_DIR, '../lesion_pid.p'), 'rb'))
+    lesion_pid = pickle.load(open(os.path.join(os.path.dirname(val_path[0]), '../lesion_pid.p'), 'rb'))
     # use zone_segdata_all for all data
-    zone_pid = pickle.load(open('/data/nvme1/meng/picai/zone_segdata_all/zone_pid.p', 'rb'))
-    gland_pid = pickle.load(open('/data/nvme1/meng/picai/gland_segdata/gland_pid.p', 'rb'))
+    if '158' in val_path[0]:
+        zone_pid = pickle.load(open('./dataset/zone_segdata_158/zone_pid.p', 'rb'))
+    elif 'MSD' in val_path[0]:
+        zone_pid = pickle.load(open('./dataset/zone_segdata_MSD/zone_pid.p', 'rb'))
+    else:
+        zone_pid = pickle.load(open('/data/nvme1/meng/picai/zone_segdata_all/zone_pid.p', 'rb'))
+    gland_pid = None if '158' in val_path[0] or 'MSD' in val_path[0] else pickle.load(open('/data/nvme1/meng/picai/gland_segdata/gland_pid.p', 'rb'))
 
     with open('/data/nvme1/meng/picai/lesion_segdata_combined/data_split.p', 'rb') as f:
         loaded_dict = pickle.load(f)
@@ -340,8 +348,6 @@ def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log
     net.eval()
     net = net.to(device)
     net = DataParallel(net)
-    plot_path = os.path.join(log_dir, 'plots')
-    os.makedirs(plot_path, exist_ok=True)
 
     if tumor_split:
         val_transformer = transforms.Compose([
@@ -352,12 +358,23 @@ def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log
         val_dataset = MultiLevel3DDataGenerator(val_path, 'split', image_size, num_class=2, transform=val_transformer,
                                               zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
     else:
-        val_transformer = transforms.Compose([
-            Normalize(),
-            # tio.CropOrPad(target_shape=(32, 128, 128)),
-            To_Tensor(num_class=2, input_channel=3)
-        ])
-        val_dataset = MultiLevelDataGenerator(val_path, 'val', image_size, num_class=2, transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
+        if model_name == ModelName.masam:
+            val_transformer = transforms.Compose([
+                Normalize_2d(),
+                Resize_2d(image_size),
+                To_Tensor()
+            ])
+            val_dataset = MultiLevel3DDataGenerator(val_path, 'random', image_size, num_class=2,
+                                                    transform=val_transformer, zone_pid=zone_pid,
+                                                    gland_pid=gland_pid,
+                                                    lesion_pid=lesion_pid)
+        else:
+            val_transformer = transforms.Compose([
+                Normalize(),
+                # tio.CropOrPad(target_shape=(32, 128, 128)),
+                To_Tensor(num_class=2, input_channel=3)
+            ])
+            val_dataset = MultiLevelDataGenerator(val_path, 'val', image_size, num_class=2, transform=val_transformer, zone_pid=zone_pid, gland_pid=gland_pid, lesion_pid=lesion_pid)
 
     val_loader = DataLoader(
         val_dataset,
@@ -371,6 +388,8 @@ def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log
     pz_dices = []
     tz_dices = []
     gland_dices = []
+    pid_list = []
+    slice_list = []
     with torch.no_grad():
         for step, loaded in enumerate(tqdm(val_loader)):
             if tumor_split:
@@ -378,8 +397,6 @@ def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log
                 if path[0] not in loaded_dict[tumor_split]:
                     continue
             else: sample, pid, slice = loaded
-            if os.path.exists(os.path.join(log_dir, 'slice_' + pid[0]+'-'+str(slice[0]) + '.png')):
-                continue
             lesion_targets = []
             zone_targets = []
             gland_targets = []
@@ -392,9 +409,15 @@ def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log
                     gland_targets.append(value)
                 elif 'zone' in name:
                     zone_targets.append(value)
-            lesion_target = torch.stack(lesion_targets).squeeze(0).squeeze(0).permute(1, 0, 2, 3) if tumor_split else torch.stack(lesion_targets).permute(1, 0, 2, 3)
-            zone_target = torch.stack(zone_targets).squeeze(1).squeeze(1).permute(1, 0, 2, 3) if tumor_split else torch.stack(zone_targets).permute(1, 0, 2, 3)
-            gland_target = torch.stack(gland_targets).squeeze(0).squeeze(0).permute(1, 0, 2, 3) if tumor_split else torch.stack(gland_targets).permute(1, 0, 2, 3)
+            lesion_target = torch.stack(lesion_targets).squeeze(0).squeeze(0).permute(1, 0, 2,
+                                                                                      3) if model_name == ModelName.swin_unetr or model_name == ModelName.masam else torch.stack(
+                lesion_targets).permute(1, 0, 2, 3)
+            zone_target = torch.stack(zone_targets).squeeze(1).squeeze(1).permute(1, 0, 2,
+                                                                                  3) if model_name == ModelName.swin_unetr or model_name == ModelName.masam else torch.stack(
+                zone_targets).permute(1, 0, 2, 3)
+            gland_target = torch.stack(gland_targets).squeeze(0).squeeze(0).permute(1, 0, 2,
+                                                                                    3) if model_name == ModelName.swin_unetr or model_name == ModelName.masam else torch.stack(
+                gland_targets).permute(1, 0, 2, 3)
 
             data = data.squeeze(0).permute(1,0,2,3).to(device) if tumor_split else data.to(device)
             lesion_target = lesion_target.to(device)
@@ -403,7 +426,7 @@ def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log
 
             with autocast(False):
                 if model_name == ModelName.masam:
-                    model_output = rearrange(net(data, True, image_size)['masks'].permute(1,0,2,3).unsqueeze(0), '1 c (b d) h w -> b c d h w', b=target.shape[0])
+                    model_output = rearrange(net(data, True, image_size)['masks'].permute(1,0,2,3).unsqueeze(0), '1 c (b d) h w -> b c d h w', b=1)
                 elif model_name == ModelName.samed:
                     model_output = net(data, True, image_size)['masks']
                 elif model_name == ModelName.itunet:
@@ -443,7 +466,7 @@ def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log
                     lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(
                         img.permute(1, 2, 0), lesion_output[id], zone_output[id],
                         gland_output[id], lesion_target[id], zone_target[id], gland_target[id],
-                        log_dir, pid[0] + '-' + str(id))
+                        pid[0] + '-' + str(id))
                     lesion_dices.append(lesion_dice)
                     pz_dices.append(pz_dice)
                     tz_dices.append(tz_dice)
@@ -451,57 +474,58 @@ def plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log
                     if lesion_target[id].max() > 0:
                         positive_lesion_dices.append(lesion_dice)
             else:
-                if model_name==ModelName.swin_unetr:
+                if model_name==ModelName.swin_unetr or model_name == ModelName.masam:
                     for id, img in enumerate(data.squeeze(0).permute(1,0,2,3)):
                         lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(
                             img.permute(1, 2, 0), lesion_output.squeeze(0)[id], zone_output.squeeze(0)[:, id],
-                            gland_output.squeeze(0)[id], lesion_target[id], zone_target[id], gland_target[id], log_dir,
+                            gland_output.squeeze(0)[id], lesion_target[id], zone_target[id], gland_target[id],
                             pid[0] + '-' + str(id))
+                        if 'MSD' in val_path[0]:
+                            check_metric = zone_target[id]
+                        else:
+                            check_metric = lesion_target[id]
+                        if check_metric.max() > 0:
+                            lesion_dices.append(lesion_dice)
+                            pz_dices.append(pz_dice)
+                            tz_dices.append(tz_dice)
+                            gland_dices.append(gland_dice)
+                            pid_list.append(pid[0])
+                            slice_list.append(id)
+                else:
+                    lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), pid[0]+'-'+slice[0])
+                    if 'MSD' in val_path[0]:
+                        check_metric = zone_target
+                    else:
+                        check_metric = lesion_target
+                    if check_metric.max() > 0:
                         lesion_dices.append(lesion_dice)
                         pz_dices.append(pz_dice)
                         tz_dices.append(tz_dice)
                         gland_dices.append(gland_dice)
-                        if lesion_target[id].max() > 0:
-                            positive_lesion_dices.append(lesion_dice)
-                else:
-                    lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), log_dir, pid[0]+'-'+slice[0])
-                    lesion_dices.append(lesion_dice)
-                    pz_dices.append(pz_dice)
-                    tz_dices.append(tz_dice)
-                    gland_dices.append(gland_dice)
-                    if lesion_target.max() > 0:
-                        positive_lesion_dices.append(lesion_dice)
-    lesion_mean_dice = torch.Tensor(lesion_dices).mean()
-    positive_lesion_mean_dice = torch.Tensor(positive_lesion_dices).mean()
-    pz_mean_dice = torch.Tensor(pz_dices).mean()
-    tz_mean_dice = torch.Tensor(tz_dices).mean()
-    gland_mean_dice = torch.Tensor(gland_dices).mean()
-    os.system(
-        f'cd {log_dir} && touch dice_result.txt && echo "lesion_mean_dice: {lesion_mean_dice}, pz_mean_dice:{pz_mean_dice}, tz_mean_dice: {tz_mean_dice}, gland_mean_dice: {gland_mean_dice}, positive_lesion_mean_dice: {positive_lesion_mean_dice}" >> dice_result.txt')
-    # lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
-    # valid_metrics = Metrics(lesion_results)
-    # auc = valid_metrics.auroc
-    # ap = valid_metrics.AP
-    # score = valid_metrics.score
-    # print(f'auc: {auc}, ap:{ap}, score: {score}')
-    # os.system(f'cd {log_dir}')
-    # os.system(f'touch result.txt')
-    # os.system(f'echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
+                        pid_list.append(pid[0])
+                        slice_list.append(slice)
+    result_dict = {}
+    for id, pid in enumerate(pid_list):
+        result_dict[f'{pid}-*-{slice_list[id]}'] = (lesion_dices, pz_dices, tz_dices, gland_dices)
+    return result_dict
 
-def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, activation, post_process, threshold, mode='normal',image_size=1024):
+def seg_eval_multi_level_ours(net, tumor_split, val_path, ckpt_path, device, activation, is_post_process, threshold, image_size=1024):
     ckpt_file = os.path.join(ckpt_path, search_ckpt_path(ckpt_path))
-    # ckpt_file = os.path.join(ckpt_path, 'epoch:37-gland_val_dice:0.78510-zone_val_dice:0.78594-lesion_val_dice:0.70998-lesion_val_ap:0.44474-lesion_val_auc:0.81439.pth')
+    lesion_pid = pickle.load(open(os.path.join(os.path.dirname(val_path[0]), '../lesion_pid.p'), 'rb'))
+    # use zone_segdata_all for all data
+    if '158' in val_path[0]:
+        zone_pid = pickle.load(open('./dataset/zone_segdata_158/zone_pid.p', 'rb'))
+    elif 'MSD' in val_path[0]:
+        zone_pid = pickle.load(open('./dataset/zone_segdata_MSD/zone_pid.p', 'rb'))
+    else:
+        zone_pid = pickle.load(open('/data/nvme1/meng/picai/zone_segdata_all/zone_pid.p', 'rb'))
+    gland_pid = None if '158' in val_path[0] or 'MSD' in val_path[0] else pickle.load(
+        open('/data/nvme1/meng/picai/gland_segdata/gland_pid.p', 'rb'))
 
     with open('/data/nvme1/meng/picai/lesion_segdata_combined/data_split.p', 'rb') as f:
         loaded_dict = pickle.load(f)
 
-    image_tsne = TSNE(n_components=2, random_state=42)
-    dense_tsne = TSNE(n_components=2, random_state=42)
-
     state_dict = torch.load(ckpt_file, map_location=device)['state_dict']
-
-    revert_transform = Resize((256, 256), mode='bilinear')
-    seg_transform = Resize((256, 256), mode='nearest')
 
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
@@ -510,229 +534,168 @@ def plot_eval_detect(net, model_name, val_path, ckpt_path, log_dir, device, acti
 
     net.load_state_dict(new_state_dict)
     net.eval()
-    net.to(device)
-    net = DataParallel(net, device_ids=[0, 1, 2, 3, 4, 5])
-    plot_path = os.path.join(log_dir, 'plots')
-    os.makedirs(plot_path, exist_ok=True)
+    net = net.to(device)
+    net = DataParallel(net)
 
-    class Normalize_2d(object):
-        def __call__(self, sample):
-            ct = sample['ct']
-            seg = sample['seg']
-            for i in range(ct.shape[0]):
-                for j in range(ct.shape[1]):
-                    if np.max(ct[i, j]) != 0:
-                        ct[i, j] = ct[i, j] / np.max(ct[i, j])
-
-            new_sample = {'ct': ct, 'seg': seg}
-            return new_sample
-    if model_name == ModelName.swin_unetr or model_name == ModelName.masam:
-        val_transformer = transforms.Compose([
-            ScaleIntensityD(keys=["ct"]),
-            ResizeD(keys=["ct", "seg"],
-                    spatial_size=(32 if model_name == ModelName.swin_unetr else 24, image_size, image_size),
-                    mode=("trilinear", "nearest")),
-            # Resize the ct to 128x128x64
-            ToTensorD(keys=["ct", "seg"])]
-        )
-    else:
-        val_transformer = transforms.Compose(
-            [Normalize_2d(), To_Tensor()])
-
-    val_dataset = DataGenerator_no_resize(val_path, transform=val_transformer,mode='val') if model_name == ModelName.swin_unetr or model_name == ModelName.masam else DataGenerator(val_path, transform=val_transformer,mode='val', image_size=image_size)
-
+    val_transformer = transforms.Compose([
+        Normalize(),
+        # tio.CropOrPad(target_shape=(32, 128, 128)),
+        To_Tensor(num_class=2, input_channel=3)
+    ])
+    val_dataset = MultiLevelDataGeneratorAlignDummy(val_path, 'val', num_class=2, transform=val_transformer,
+                                                    zone_pid=zone_pid,
+                                                    gland_pid=gland_pid, lesion_pid=lesion_pid)
     val_loader = DataLoader(
         val_dataset,
         batch_size=1,
         shuffle=False,
-        num_workers=12,
+        num_workers=0,
         pin_memory=True
     )
-    count = 0
-
-    dice_dict = {}
-    lesion_results = []
-    image_embeddings = []
-    dense_embeddings = []
-    image_targets = []
+    lesion_dices = []
+    positive_lesion_dices = []
+    pz_dices = []
+    tz_dices = []
+    gland_dices = []
+    pid_list = []
+    slice_list = []
     with torch.no_grad():
-        for step, (sample, path) in enumerate(tqdm(val_loader)):
-            # if path[0] in loaded_dict['small']:
-            #     continue
-            data = sample['ct']
-            target = sample['seg']
-            if model_name == ModelName.swin_unetr or model_name == ModelName.masam:
-                data = data
-            else:
-                data = data.squeeze().transpose(1, 0)
-            data = data.to(device)
-            target = target.to(device)
-            if mode == 'normal':
-                if model_name == ModelName.masam:
-                    output = rearrange(net(data, True, image_size)['masks'].permute(1,0,2,3).unsqueeze(0), '1 c (b d) h w -> b c d h w', b=target.shape[0])
-                elif model_name == ModelName.samed:
-                    output = net(data, True, image_size)['masks']
+        for step, loaded in enumerate(tqdm(val_loader)):
+            if tumor_split:
+                sample, pid, slice, path = loaded
+                if path[0] not in loaded_dict[tumor_split]:
+                    continue
+            else: sample, pid, slice = loaded
+            lesion_targets = []
+            zone_targets = []
+            gland_targets = []
+            for name, value in sample.items():
+                if name == 'ct':
+                    data = value
+                elif 'lesion' in name:
+                    lesion_targets.append(value)
+                elif 'gland' in name:
+                    gland_targets.append(value)
+                elif 'zone' in name:
+                    zone_targets.append(value)
+            text_toekns = sample['tokens']
+            lesion_target = torch.stack(lesion_targets).squeeze(0).squeeze(0).permute(1, 0, 2, 3) if tumor_split else torch.stack(lesion_targets).permute(1, 0, 2, 3)
+            zone_target = torch.stack(zone_targets).squeeze(1).squeeze(1).permute(1, 0, 2, 3) if tumor_split else torch.stack(zone_targets).permute(1, 0, 2, 3)
+            gland_target = torch.stack(gland_targets).squeeze(0).squeeze(0).permute(1, 0, 2, 3) if tumor_split else torch.stack(gland_targets).permute(1, 0, 2, 3)
+
+            data = data.squeeze(0).permute(1,0,2,3).to(device) if tumor_split else data.to(device)
+            lesion_target = lesion_target.to(device)
+            zone_target = zone_target.to(device)
+            gland_target = gland_target.to(device)
+            text_tokens = text_toekns.to(device)
+
+            with autocast(False):
+                if activation:
+                    logits = torch.sigmoid(net(data, text_tokens.squeeze(0)))
                 else:
-                    output = net(data)
-            elif mode == 'viz_representation':
-                output, image_embedding, dense_embedding = net(data)
-                image_embeddings.append(
-                    torch.mean(image_embedding.reshape(image_embedding.shape[0], image_embedding.shape[1], -1), dim=2))
-                dense_embeddings.append(
-                    torch.mean(dense_embedding.reshape(dense_embedding.shape[0], dense_embedding.shape[1], -1), dim=2))
-                image_targets.append(torch.Tensor([this_target.max() > 0 for this_target in target.squeeze(0)]))
-            if isinstance(output, tuple):
-                output = output[0]
+                    logits = net(data, text_tokens.squeeze(0))
+            # post_process('./', data.detach().cpu(), logits)
+            output = logits > threshold
+            # if is_post_process:
+            #     output = torch.from_numpy(erode_dilate(output.squeeze(0).detach().cpu().numpy())).unsqueeze(0).to(device)
+            gland_output = output[:, 0]
+            zone_output = output[:, 1:3]
+            lesion_output = output[:, 3]
+            # intersect = (gland_output & lesion_output).sum().item()
+            # lesion_size = lesion_output.sum().item()
+            # ratio = intersect / lesion_size
+                # if isinstance(output, tuple):
+                #     output = output[0]
+            # multi_level_target = torch.cat([gland_target, zone_target, lesion_target], dim=1).permute(0, 2, 3, 1).detach().cpu().numpy()
+            # preds = []
+            # for slices in logits[:,-1,:,:].detach().cpu().numpy():
+            #     preds.append(extract_lesion_candidates(np.expand_dims(slices, axis=-1), threshold=0.5)[0])
+            # for y_det, y_true in zip(preds, [lesion_target[:, 0]]):
+            #     y_list, *_ = evaluate_case(
+            #         y_det=y_det,
+            #         y_true=y_true.permute(1, 2, 0).detach().cpu().numpy(),
+            #     )
+            #
+            #     # aggregate all validation evaluations
+            #     lesion_results.append(y_list)
 
-            output = output[0].float() if model_name == ModelName.itunet else output.float()
-            if activation:
-                output = torch.sigmoid(output)  # N*H*W
-            output = output.detach().cpu()
-            lesion_output = output[:, -1, :, :].squeeze(0).unsqueeze(1) if model_name == ModelName.swin_unetr or model_name == ModelName.masam else output[:, -1, :, :].unsqueeze(1)
-            lesion_output = torch.from_numpy(np.array([revert_transform(slice) for slice in lesion_output])).squeeze(1)
-            gland_output = output[:, 0, :, :].squeeze(0).unsqueeze(1) if model_name == ModelName.swin_unetr or model_name == ModelName.masam else output[:, 0, :, :].unsqueeze(1)
-            gland_output = torch.from_numpy(np.array([revert_transform(slice) for slice in gland_output])).squeeze(1)
-            target = target.detach().cpu()
-            target = target[0].permute(1,0,2,3) if model_name == ModelName.swin_unetr or model_name == ModelName.masam else target[0].unsqueeze(1)
-            target = torch.from_numpy(np.array([seg_transform(slice) for slice in target])).squeeze(1)
-            # if plot:
-            #     for
-            #     plot_segmentation2D()
-
-
-            lesion_results = compute_results_detect(lesion_output.numpy(), target.numpy(), gland_output.numpy(),
-                                                    lesion_results, threshold, post_process)
-            # if step > 2:
-            #     break
-
-    if mode == 'viz_representation':
-        image_embeddings = torch.cat(image_embeddings)
-        dense_embeddings = torch.cat(dense_embeddings)
-        image_targets = torch.cat(image_targets)
-        image_embeddings_2d = image_tsne.fit_transform(image_embeddings.detach().cpu().numpy())
-        dense_embeddings_2d = dense_tsne.fit_transform(dense_embeddings.detach().cpu().numpy())
-
-        fig, axes = plt.subplots(1, 2, figsize=(20, 8))
-
-        # Plot Embeddings1
-        axes[0].scatter(image_embeddings_2d[image_targets == 0, 0], image_embeddings_2d[image_targets == 0, 1], label='no lesion present', alpha=0.6)
-        axes[0].scatter(image_embeddings_2d[image_targets == 1, 0], image_embeddings_2d[image_targets == 1, 1], label='lesion present', alpha=0.6)
-        axes[0].set_title('2D Visualization of Image Embeddings')
-        axes[0].set_xlabel('TSNE Component 1')
-        axes[0].set_ylabel('TSNE Component 2')
-
-        # Plot Embeddings2
-        axes[1].scatter(dense_embeddings_2d[image_targets == 0, 0], dense_embeddings_2d[image_targets == 0, 1],
-                        label='no lesion present', alpha=0.6)
-        axes[1].scatter(dense_embeddings_2d[image_targets == 1, 0], dense_embeddings_2d[image_targets == 1, 1],
-                        label='lesion present', alpha=0.6)
-        axes[1].set_title('2D Visualization of Dense Embeddings')
-        axes[1].set_xlabel('TSNE Component 1')
-        axes[1].set_ylabel('TSNE Component 2')
-
-        # Show the plot
-        plt.tight_layout()
-        plt.savefig(os.path.join(log_dir, f'{mode}.png'))
-
-    lesion_results = {idx: result for idx, result in enumerate(lesion_results)}
-    FP_patient_level = 0
-    TP_patient_level = 0
-    FN_patient_level = 0
-    TN_patient_level = 0
-    lesion_results_list = []
-    for idx, lesion_result in lesion_results.items():
-        this_FP_patient_level = 0
-        this_TP_patient_level = 0
-        this_FN_patient_level = 0
-        this_TN_patient_level = 0
-        if len(lesion_result) == 0:
-            this_TN_patient_level = 1
-        for this_lesion_result in lesion_result:
-            if this_lesion_result[0] == 0 and this_lesion_result[2] == 0:
-                this_FP_patient_level = 1
-                this_TP_patient_level = 0
-                this_FN_patient_level = 0
-                this_TN_patient_level = 0
-                break
-            elif this_lesion_result[0] == 1 and this_lesion_result[2] != 0:
-                this_TP_patient_level = 1
-            elif this_lesion_result[0] == 1 and this_lesion_result[2] == 0:
-                this_FN_patient_level = 1
+            lesion_dice, pz_dice, tz_dice, gland_dice = plot_segmentation2D_multilevel(data.squeeze(0).permute(1, 2, 0), lesion_output.squeeze(0), zone_output.squeeze(0), gland_output.squeeze(0), lesion_target.squeeze(0), zone_target.squeeze(0), gland_target.squeeze(0), pid[0]+'-'+slice[0])
+            if 'MSD' in val_path[0]:
+                check_metric = zone_target
             else:
-                raise NotImplementedError
-        for this_lesion_result in lesion_result:
-            lesion_results_list.append(this_lesion_result)
-        if this_TP_patient_level == 1 and this_FN_patient_level == 1:
-            print('TP and FN coexist')
-        FP_patient_level += this_FP_patient_level
-        TP_patient_level += this_TP_patient_level
-        FN_patient_level += this_FN_patient_level
-        TN_patient_level += this_TN_patient_level
-    FP_lesion_level = 0
-    TP_lesion_level = 0
-    FN_lesion_level = 0
-    TN_lesion_level = 0
-    for lesion_result_tuple in lesion_results_list:
-        if lesion_result_tuple[0] == 0 and lesion_result_tuple[2] == 0:
-            FP_lesion_level += 1
-        elif lesion_result_tuple[0] == 1 and lesion_result_tuple[2] != 0:
-            TP_lesion_level += 1
-        elif lesion_result_tuple[0] == 1 and lesion_result_tuple[2] == 0:
-            FN_lesion_level += 1
-        else:
-            raise NotImplementedError
-    conf_matrix_lesion_level = np.array([[TN_patient_level, FP_lesion_level], [FN_lesion_level, TP_lesion_level]])
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(conf_matrix_lesion_level, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted 0', 'Predicted 1'],
-                yticklabels=['Actual 0', 'Actual 1'])
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.title('Lesion Level Confusion Matrix')
-    plt.savefig(os.path.join(log_dir, 'Lesion Level Confusion Matrix.png'))
-
-    conf_matrix_patient_level = np.array([[TN_patient_level, FP_patient_level], [FN_patient_level, TP_patient_level]])
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(conf_matrix_patient_level, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted 0', 'Predicted 1'],
-                yticklabels=['Actual 0', 'Actual 1'])
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.title('Patient Level Confusion Matrix')
-    plt.savefig(os.path.join(log_dir, 'Patient Level Confusion Matrix.png'))
-
-    valid_metrics = Metrics(lesion_results)
-    auc = valid_metrics.auroc
-    ap = valid_metrics.AP
-    score = valid_metrics.score
-    print(f'auc: {auc}, ap:{ap}, score: {score}')
-    os.system(f'cd {log_dir} && touch result.txt && echo "auc: {auc}, ap:{ap}, score: {score}" >> result.txt')
-
-
-
-
+                check_metric = lesion_target
+            if check_metric.max() > 0:
+                lesion_dices.append(lesion_dice)
+                pz_dices.append(pz_dice)
+                tz_dices.append(tz_dice)
+                gland_dices.append(gland_dice)
+                pid_list.append(pid[0])
+                slice_list.append(slice)
+    result_dict = {}
+    for id, pid in enumerate(pid_list):
+        result_dict[f'{pid}-*-{slice_list[id]}'] = (lesion_dices, pz_dices, tz_dices, gland_dices)
+    return result_dict
 
 if __name__ == '__main__':
-    PHASE = 'detect'
+    def get_sorted_list(dataset_name):
+        mode = 'normal'
+        from config import CHECKPOINT_PATH
+        is_post_process = True
+        threshold = 0.5
 
-    model_name = ModelName.unet
+        tumor_split = None
 
-    mode = 'normal'
+        # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
+        if dataset_name == 'picai':
+            PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_2d'
+        elif dataset_name == '158':
+            PATH_DIR = './dataset/lesion_segdata_158/data_2d'
+        elif dataset_name == 'MSD':
+            PATH_DIR = './dataset/lesion_segdata_MSD/data_2d'
+        PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
+        train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
 
-    is_post_process = True
-    threshold = 0.5
-    if model_name == ModelName.unet:
+        model_name = ModelName.unet
         activation = False
         image_size = 256
         net = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
-                                           in_channels=3, out_channels=4, init_features=32, pretrained=False)
-    elif model_name == ModelName.itunet:
+                                               in_channels=3, out_channels=4, init_features=32, pretrained=False)
+        ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'UNet_Focal_Unified_equal_rate_0.8_weighted_loss_combined_label_lr_0.0001_weight_decay_0.001')
+        unet_dict = seg_eval_multi_level(net, tumor_split, model_name, PATH_LIST if '158' in val_path[0] or 'MSD' in val_path[0] else val_path, ckpt_path, 'cuda:0', activation, is_post_process, threshold, image_size=image_size)
+
+        if dataset_name == 'picai':
+            PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d'
+        elif dataset_name == '158':
+            PATH_DIR = './dataset/lesion_segdata_158/data_3d'
+        elif dataset_name == 'MSD':
+            PATH_DIR = './dataset/lesion_segdata_MSD/data_3d'
+        PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
+        train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
         activation = True
-        image_size = 384
-        net = itunet_2d(n_channels=3, n_classes=4,
-                  image_size=(image_size, image_size), transformer_depth=24)
-    elif model_name == ModelName.medsam:
+        image_size = 256
+        sam, img_embedding_size = sam_model_registry_MASAM['vit_b'](image_size=image_size,
+                                                                    num_classes=3,
+                                                                    checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth',
+                                                                    pixel_mean=[0., 0., 0.],
+                                                                    pixel_std=[1., 1., 1.])
+        model_name = ModelName.masam
+        net = Fact_tt_Sam(sam, 32, s=1.0)
+        ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'MASAM_Focal_Unified_equal_rate_batch_4_tumorsplit_0.001_image_1024_dataset_picai_valmode_2d_lr_0.0001_weight_decay_0.001')
+        masam_dict = seg_eval_multi_level(
+            net, tumor_split, model_name, PATH_LIST if '158' in val_path[0] or 'MSD' in val_path[0] else val_path, ckpt_path, 'cuda:0', activation, is_post_process, threshold,
+            image_size=image_size)
+
+        if dataset_name == 'picai':
+            PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_2d'
+        elif dataset_name == '158':
+            PATH_DIR = './dataset/lesion_segdata_158/data_2d'
+        elif dataset_name == 'MSD':
+            PATH_DIR = './dataset/lesion_segdata_MSD/data_2d'
+        PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
+        train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
         activation = True
-        image_size = 1024
-        sam_model = sam_model_registry['vit_b'](checkpoint='/data/nvme1/meng/cvpr25_results/medsam_vit_b.pth')
+        sam_model = sam_model_registry['vit_b'](checkpoint=os.path.join(CHECKPOINT_PATH, 'medsam_vit_b.pth'))
+
         dense_model = ModelEmb()
         multi_mask_decoder = MaskDecoder(
             num_multimask_outputs=4,
@@ -746,68 +709,63 @@ if __name__ == '__main__':
             iou_head_depth=3,
             iou_head_hidden_dim=256,
         )
-        net = MedSAMAUTOMULTI(
+
+        text_encoder = TextEncoder(embed_dim=256, text_cfg_path=CHECKPOINT_PATH)
+        atten_encoder = VisionTransformer(input_resolution=1024, patch_size=16, width=256, layers=3, heads=8,
+                                          output_dim=256)
+
+        net = MedSAMAUTOMULTIALIGNTYPE1(
             image_encoder=sam_model.image_encoder,
             mask_decoder=multi_mask_decoder,
             prompt_encoder=sam_model.prompt_encoder,
+            text_encoder=text_encoder,
             dense_encoder=dense_model,
             image_size=512,
-            mode=mode
-        )
-    elif model_name == ModelName.swin_unetr:
-        activation = True
-        image_size = 256
-        net = SwinUNETR(img_size=(32, image_size, image_size),
-                          in_channels=3,
-                          out_channels=4,
-                          feature_size=48,
-                          use_checkpoint=True,
-                          )
-    elif model_name == ModelName.masam:
-        activation = True
-        image_size = 256
-        sam, img_embedding_size = sam_model_registry_MASAM['vit_b'](image_size=image_size,
-                                                                    num_classes=3,
-                                                                    checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth',
-                                                                    pixel_mean=[0., 0., 0.],
-                                                                    pixel_std=[1., 1., 1.])
-        net = Fact_tt_Sam(sam, 32, s=1.0)
-    elif model_name == ModelName.samed:
-        activation = True
-        image_size = 256
-        sam, img_embedding_size = sam_model_registry_SAMed['vit_b'](image_size=image_size,
-                                                                    num_classes=3,
-                                                                    checkpoint='/data/nvme1/meng/cvpr25_results/sam_vit_b_01ec64.pth',
-                                                                    pixel_mean=[0., 0., 0.],
-                                                                    pixel_std=[1., 1., 1.])
-        net = LoRA_Sam(sam, r=4)
+            attention_encoder=atten_encoder,
+            mode=mode)
+        ckpt_path = './new_ckpt/{}/Seg_Align/{}/fold1'.format('seg',f'2024-11-08T18:12:39_lr_0.0001_weight_decay_0.001')
+        ours_dict = seg_eval_multi_level_ours(
+            net, tumor_split, PATH_LIST if '158' in val_path[0] or 'MSD' in val_path[0] else val_path, ckpt_path, 'cuda:0', activation, is_post_process, threshold,
+            image_size=image_size)
 
-    # mask_decoder_model = SegDecoderCNN(num_classes=4, num_depth=4)
-    #
-    # net = MedSAMAUTOCNN(
-    #     image_encoder=sam_model.image_encoder,
-    #     mask_decoder=mask_decoder_model,
-    #     prompt_encoder=sam_model.prompt_encoder,
-    #     dense_encoder=None,
-    #     image_size=512
-    # )
-    tumor_split = None
+        info_dict = {'id':[], 'mean seg boost': [], 'gland boost':[], 'zone boost':[], 'lesion boost':[]}
+        for sample_name, sample in unet_dict.items():
+            gland_boost = ours_dict[sample_name][3] - unet_dict[sample_name][3] + ours_dict[sample_name][3] - masam_dict[sample_name][3]
+            pz_boost = ours_dict[sample_name][1] - unet_dict[sample_name][1] + ours_dict[sample_name][1] - masam_dict[sample_name][1]
+            tz_boost = ours_dict[sample_name][2] - unet_dict[sample_name][2] + ours_dict[sample_name][2] - masam_dict[sample_name][2]
+            lesion_boost = ours_dict[sample_name][0] - unet_dict[sample_name][0] + ours_dict[sample_name][0] - masam_dict[sample_name][0]
+            info_dict['gland boost'].append(gland_boost)
+            info_dict['pz boost'].append(pz_boost)
+            info_dict['tz boost'].append(tz_boost)
+            info_dict['lesion boost'].append(lesion_boost)
+            if dataset_name == 'MSD':
+                info_dict['mean seg boost'].append((pz_boost + tz_boost) / 2)
+            elif dataset_name == '158':
+                info_dict['mean seg boost'].append((pz_boost + tz_boost + lesion_boost) / 3)
+            else:
+                info_dict['mean seg boost'].append((gland_boost + pz_boost + tz_boost + lesion_boost) / 4)
+            info_dict['id'].append(sample_name)
 
-    ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg',f'UNet_Focal_0.8_Unified_equal_rate_batch_70_tumorsplit_0.001_image_256_dataset_picai_valmode_2d_lr_0.0001_weight_decay_0.001')
-    # ckpt_path = './new_ckpt/{}/{}/fold1'.format('seg', 'UNet_Unified_equal_rate_lr_0.0001_weight_decay_0.001')
+        combined = list(zip(info_dict['mean seg boost'], info_dict['gland boost'], info_dict['pz boost'], info_dict['tz boost'], info_dict['lesion boost'], info_dict['id'], info_dict['slice id']))
 
-    log_dir = f'./new_log/eval/UNet_Focal_0.8_Unified_equal_rate_batch_70_tumorsplit_0.001_image_256_dataset_picai_valmode_2d_lr_0.0001_weight_decay_0.001_threshold_{threshold}_split_{tumor_split}'
-    # log_dir = './new_log/eval/UNet3LevelALLDataEqualRate'
-    if PHASE == 'seg':
-        if tumor_split:
-            PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d'
-        else:
-            PATH_DIR = '/data/nvme1/meng/picai/lesion_segdata_combined/data_2d'
-        PATH_LIST = glob.glob(os.path.join(PATH_DIR, '*.hdf5'))
-        train_path, val_path = get_cross_validation_by_sample(PATH_LIST, FOLD_NUM, 1)
-        plot_eval_multi_level(net, tumor_split, model_name, val_path, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, threshold, image_size=image_size)
-    else:
-        PATH_AP = '/data/nvme1/meng/picai/lesion_segdata_combined/data_3d'
-        AP_LIST = glob.glob(os.path.join(PATH_AP, '*.hdf5'))
-        train_AP, val_AP = get_cross_validation_by_sample(AP_LIST, FOLD_NUM, 1)
-        plot_eval_detect(net, model_name, val_AP, ckpt_path, log_dir, 'cuda:0', activation, is_post_process, threshold, mode, image_size=image_size)
+        # Sort the combined list based on the first list (list1)
+        sorted_combined = sorted(combined, key=lambda x: x[0])
+
+        # Unzip the sorted list back into individual lists
+        sorted_list1, sorted_list2, sorted_list3, sorted_list4, sorted_list5, sorted_list6, sorted_list7 = zip(*sorted_combined)
+
+        # Convert tuples back to lists (if needed)
+        sorted_list1 = list(sorted_list1)
+        sorted_list2 = list(sorted_list2)
+        sorted_list3 = list(sorted_list3)
+        sorted_list4 = list(sorted_list4)
+        sorted_list5 = list(sorted_list5)
+        sorted_list6 = list(sorted_list6)
+        sorted_list7 = list(sorted_list7)
+        return sorted_list1, sorted_list2, sorted_list3, sorted_list4, sorted_list5, sorted_list6, sorted_list7
+
+    # picai_mean_seg_boost, picai_gland_seg_boost, picai_pz_seg_boost, picai_tz_seg_boost, picai_lesion_seg_boost, picai_id, picai_slice = get_sorted_list('picai')
+    # _158_mean_seg_boost, _158_gland_seg_boost, _158_pz_seg_boost, _158_tz_seg_boost, _158_lesion_seg_boost, _158_id, _158_slice = get_sorted_list('158')
+    MSD_mean_seg_boost, MSD_gland_seg_boost, MSD_pz_seg_boost, MSD_tz_seg_boost, MSD_lesion_seg_boost, MSD_id, MSD_slice = get_sorted_list('MSD')
+
+    print()
