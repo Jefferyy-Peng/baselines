@@ -2,14 +2,62 @@ import os
 import random
 from pathlib import Path
 from typing import Union
+import cv2
+from torchvision import transforms
 
 import h5py
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from picai_eval.eval import evaluate_case
-from report_guided_annotation import extract_lesion_candidates
 from skimage.metrics import hausdorff_distance
+
+from eval_utils import extract_lesion_candidates
+from scipy.spatial.distance import cdist
+from enum import Enum
+
+class ModelName(Enum):
+    medsam = 'MedSAMAuto'
+    swin_unetr = 'Swin-UNETR'
+    unet = 'UNet'
+    itunet = 'ITUNet'
+    samcnn = 'SAMCNN'
+    masam = 'MASAM'
+    samed = 'SAMed'
+    transunet = 'TransUNet'
+    transunetmm = 'TransUNet-MultiModal'
+
+
+def calculate_max_tumor_distance(mask, spacing):
+    """
+    Calculate the maximum Euclidean distance between tumor voxels in a 3D MRI mask.
+
+    Parameters:
+    - mask (np.ndarray): 3D binary mask where tumor voxels are labeled as 1.
+    - spacing (list or tuple): The voxel spacing for the z, y, and x axes in mm, e.g., [3.0, 0.5, 0.5].
+
+    Returns:
+    - max_distance (float): The maximum Euclidean distance between any two tumor voxels in mm.
+    """
+
+    # Find the coordinates of all tumor voxels (where mask == 1)
+    tumor_voxel_coords = np.argwhere(mask == 1)
+
+    # If no tumor is found, return zero
+    if len(tumor_voxel_coords) == 0:
+        return 0
+
+    # Convert voxel coordinates to real-world coordinates by applying the spacing
+    real_world_coords = np.multiply(tumor_voxel_coords, spacing)
+
+    # Calculate the pairwise Euclidean distances between all tumor voxels
+    distances = cdist(real_world_coords, real_world_coords, metric='euclidean')
+
+    # Find and return the maximum distance
+    max_distance = np.max(distances)
+
+    return max_distance
+
 
 
 def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=None):
@@ -56,10 +104,10 @@ def plot_segmentation2D(img2D, prev_masks, gt2D, save_path, count, image_dice=No
     plt.savefig(os.path.join(save_path, f'slice_{count}'))
     plt.close()
 
-def compute_results_detect(logits, target, results):
+def compute_results_detect(logits, target, gland_output, results, threshold, post_process):
     preds = []
     logits = logits.detach().cpu().numpy() if isinstance(logits, torch.Tensor) else logits
-    preds.append(extract_lesion_candidates(logits, threshold=0.5)[0])
+    preds.append(extract_lesion_candidates(logits, gland_output, threshold=threshold, post_process=post_process)[0])
     for y_det, y_true in zip(preds,
                              [target]):
         y_list, *_ = evaluate_case(
@@ -111,6 +159,49 @@ def multi_hd(y_true,y_pred,num_classes):
     
     return hd_list, round(np.mean(hd_list),4)
 
+class Normalize_2d(object):
+    def __call__(self, sample):
+        new_sample = {}
+        for key, value in sample.items():
+            if key == 'ct':
+                ct = value
+                if isinstance(ct, torch.Tensor):
+                    ct = ct.numpy()
+                for i in range(ct.shape[0]):
+                    for j in range(ct.shape[1]):
+                        if np.max(ct[i, j]) != 0:
+                            ct[i, j] = ct[i, j] / np.max(ct[i, j])
+                new_sample[key] = ct
+            else:
+                new_sample[key] = value
+        return new_sample
+
+class Resize_2d(object):
+    def __init__(self, size):
+        self.size = size
+    def __call__(self, sample):
+        new_sample = {}
+        transform = transforms.Resize(size=self.size)
+        seg_transform = transforms.Resize(size=self.size,
+                                          interpolation=transforms.functional.InterpolationMode.NEAREST)
+        for key, value in sample.items():
+            if key == 'ct':
+                ct = value
+                if isinstance(ct, np.ndarray):
+                    ct = torch.tensor(ct, dtype=torch.float32)
+                new_ct = []
+                for j in range(ct.shape[1]):
+                    new_ct.append(transform(ct[:, j]))
+                new_sample[key] = torch.stack(new_ct, dim=1)
+            else:
+                seg = value
+                if isinstance(seg, np.ndarray):
+                    seg = torch.tensor(seg, dtype=torch.uint8)
+                new_seg = []
+                for j in range(seg.shape[1]):
+                    new_seg.append(seg_transform(seg[:, j]))
+                new_sample[key] = torch.stack(new_seg, dim=1)
+        return new_sample
 
 def hdf5_reader(data_path, key):
     hdf5_file = h5py.File(data_path, 'r')
@@ -184,12 +275,10 @@ def dfs_remove_weight(ckpt_path,retain=5):
 def poly_lr(epoch, max_epochs,ck_epoch = 0, initial_lr = 1e-2, exponent=0.9):
     return initial_lr * (1 - (epoch - ck_epoch) / (max_epochs - ck_epoch))**exponent
 
-
 def get_cross_validation_by_sample(path_list, fold_num, current_fold):
 
     sample_list = list(set([os.path.basename(case).split('_')[0] for case in path_list]))
     sample_list.sort()
-    print(sample_list)
     print('number of sample:',len(sample_list))
     _len_ = len(sample_list) // fold_num
 

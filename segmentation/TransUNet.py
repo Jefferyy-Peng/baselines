@@ -12,6 +12,7 @@ from os.path import join as pjoin
 import torch
 import torch.nn as nn
 import numpy as np
+from einops import rearrange, einsum
 
 from torch.nn import CrossEntropyLoss, Dropout, Softmax, Linear, Conv2d, LayerNorm
 from torch.nn.modules.utils import _pair
@@ -729,6 +730,95 @@ class VisionTransformer(nn.Module):
                 for bname, block in self.transformer.embeddings.hybrid_model.body.named_children():
                     for uname, unit in block.named_children():
                         unit.load_from(res_weight, n_block=bname, n_unit=uname)
+
+class VisionTransformerALIGNTYPE2FINE(nn.Module):
+    def __init__(
+            self,
+            vit,
+            text_encoder,
+            mode='align',
+
+    ):
+        super().__init__()
+        self.vit = vit
+        self.text_encoder = text_encoder
+        self.mode = mode
+
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+
+        # self.img_projector1 = nn.Conv2d(in_channels=256, out_channels=256, kernel_size=1, stride=1, padding=0)
+        # self.img_projector2 = nn.Conv2d(in_channels=256, out_channels=256, kernel_size=1, stride=1, padding=0)
+        # self.relu = nn.ReLU(inplace=True)
+
+        # #freeze dense encoder
+        # for param in self.dense_encoder.parameters():
+        #     param.requires_grad = False
+
+        # # freeze image encoder; Not updating the image encoder
+        # for param in self.vit.transformer.parameters():
+        #     param.requires_grad = False
+
+        # # freeze mask decoder
+        # for param in self.mask_decoder.parameters():
+        #     param.requires_grad = False
+
+    def forward(self, image, tokens, concept_embeding=None):
+
+        if image.size()[1] == 1:
+            image = image.repeat(1,3,1,1)
+        image_embedding, attn_weights, features = self.vit.transformer(image)  # (B, n_patch, hidden)
+
+        # with torch.no_grad():
+        #     image_embedding = self.image_encoder(image)  # (B, 256, 64, 64)
+
+        text_embedding = self.text_encoder(tokens)
+
+        image_embed_normalized = F.normalize(image_embedding, dim=1)  # Model output image shape: [B, 256, 768]
+        if concept_embeding:
+            concept_embed_normalized = F.normalize(concept_embeding, dim=-1)  # shape [B, # of concepts, 256]
+        image_reshaped = image_embedding.permute(0, 2, 1)  # Shape: [B, 768, 256]
+
+        # print(concept_embed_normalized.shape)
+
+        out_heatmaps = []
+        out_it = []
+
+        if concept_embeding:
+            for i in range(concept_embed_normalized.shape[1]):  # iterate numebr of concepts
+                it_sim = einsum(image_reshaped, concept_embed_normalized[:, i, :], 'b n c, b c -> b n')  # Shape: [B, 4096]
+                it_sim = rearrange(it_sim, 'b (h w) -> b h w', h=64, w=64)  # Shape: [B, 64, 64]
+                it_sim = F.relu(it_sim, inplace=False)  # remove negative
+                it_sim = it_sim.unsqueeze(1)
+                it_heatmap = F.interpolate(it_sim, size=(1024, 1024), mode='bilinear', align_corners=True)
+                # it_heatmap = it_sim
+                out_heatmaps.append(it_heatmap)
+                out_it.append(it_sim)
+
+            final_heatmaps = torch.cat(out_heatmaps, dim=1)
+            final_it_ori = torch.cat(out_it, dim=1)
+        else:
+            final_heatmaps = None
+            final_it_ori = None
+        # print(final_it_ori.shape)
+        # print(f'image shape: {image.shape} | text shape: {tokens.shape} | cencept shape: {concept_embeding.shape} | computed heatmaps shape:{final_heatmaps.shape}')
+
+        image_text_fusion = image_embedding + text_embedding.view(text_embedding.shape[0], 1, text_embedding.shape[1])
+
+        image = self.vit.decoder(image_embedding, features)
+        # image = self.vit.decoder(image_text_fusion, features)
+        ori_res_masks = self.vit.segmentation_head(image)
+
+        if self.mode == 'normal':
+            return ori_res_masks
+        elif self.mode == 'align':
+            return ori_res_masks, image_reshaped, text_embedding, self.logit_scale.exp(), final_heatmaps
+        elif self.mode == 'align_eval':
+            return ori_res_masks, image_reshaped, text_embedding, self.logit_scale.exp(), final_heatmaps, final_it_ori
+        elif self.mode == 'viz_representation':
+            return ori_res_masks, image_reshaped
+
+
+
 
 CONFIGS = {
     'ViT-B_16': get_b16_config(),
