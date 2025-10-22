@@ -1,3 +1,4 @@
+import json
 import os
 from collections import OrderedDict
 
@@ -5,6 +6,7 @@ import torch
 import wandb
 from matplotlib import pyplot as plt
 from safetensors.torch import load_file
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Subset, Dataset
 from sklearn.model_selection import KFold
 from accelerate import Accelerator
@@ -12,6 +14,8 @@ from torch.optim import Adam
 from monai.metrics import DiceMetric
 from monai.data import decollate_batch
 from monai.inferers import sliding_window_inference
+import scipy.ndimage as ndi
+
 from tqdm import tqdm
 import torch.nn.functional as F
 import numpy as np
@@ -119,7 +123,9 @@ class SyMRI2DDataset(Dataset):
                     self.slice_paths.append(os.path.join(patient_dir, f))
 
         # MONAI transforms
-        common_keys: KeysCollection = ["r2", "t1w", "psir"]
+        # common_keys: KeysCollection = ["r2", "t1w", "psir", "t2w"]
+        common_keys: KeysCollection = ["t1w"]
+
         label_key = "label"
 
         if split == 'train':
@@ -149,9 +155,10 @@ class SyMRI2DDataset(Dataset):
         transformed = self.transform(data)
 
         # Stack input channels
-        r2, t1w, psir = transformed["r2"], transformed["t1w"], transformed["psir"]
+        # r2, t1w, psir, t2w = transformed["r2"], transformed["t1w"], transformed["psir"], transformed["t1w"]
+        t1w = transformed["t1w"]
 
-        output = torch.cat([r2,t1w,psir])
+        output = torch.cat([t1w])
 
         if "label" in transformed:
             return output, transformed["label"]
@@ -187,7 +194,9 @@ class SyMRI3DDataset(Dataset):
             self.slice_paths.append(scan_path)
 
         # MONAI transforms
-        common_keys: KeysCollection = ["r2", "t1w", "psir"]
+        common_keys: KeysCollection = ["r2", "t1w", "psir", "t2w"]
+        # common_keys: KeysCollection = ["t1w"]
+
         label_key = "label"
 
         if split == 'train':
@@ -221,9 +230,11 @@ class SyMRI3DDataset(Dataset):
         data['t1w'] = torch.cat([item['t1w'] for item in data_list])
         data['psir'] = torch.cat([item['psir'] for item in data_list])
         data['label'] = torch.cat([item['label'] for item in data_list])
+        data['t2w'] = torch.cat([item['t2w'] for item in data_list])
 
         if "label" in data.keys():
-            return torch.stack([data['r2'], data["t1w"], data['psir']], dim=1), data["label"]
+            return torch.stack([data['r2'], data["t1w"], data['psir'], data['t2w']], dim=1), data["label"]
+            # return torch.stack([data["t1w"]], dim=1), data["label"]
         else:
             return data["t1w"]
 
@@ -282,7 +293,7 @@ def build_model():
     #     dense_encoder=dense_model,
     #     image_size=512,
     # )
-    model = UNet2d(in_channels=3, out_channels=4)
+    model = UNet2d(in_channels=4, out_channels=4)
 
     return model
 
@@ -434,10 +445,12 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
     run = wandb.init(project="medsam", config=sweep_config or {}, reinit=True, name=f"SyMRI_train")
     config = wandb.config
     lr = config.get("lr", 1e-4)
-    alpha_warmup = 120
+    alpha_warmup = 160
 
     model = build_model()
     optimizer = Adam(model.parameters(), lr=lr, weight_decay=0.001)
+
+    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False, alpha=torch.tensor([0.001, 1., 1., 1.]))
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=4, shuffle=True)
@@ -454,17 +467,18 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
         for data, label in tqdm(train_loader):
             preds = model(data)
             if plot_train:
-                plot_segmentation_grid(data[:,0], torch.argmax(preds,dim=1), label.squeeze(1), file_name='train_plot.png')
+                plot_segmentation_grid(data[:,3], torch.argmax(preds,dim=1), label.squeeze(1), file_name='train_plot.png')
             if epoch == alpha_warmup:
                 loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False, alpha=torch.tensor([1.0,1.0,1.0,1.0]))
-            elif epoch == 70:
+            elif epoch == 120:
                 loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False, alpha=torch.tensor([0.1, 1.0, 1.0, 1.0]))
-            elif epoch == 40:
+            elif epoch == 80:
                 loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False, alpha=torch.tensor([0.01, 1.0, 1.0, 1.0]))
             loss = loss_fn(preds, label.long())
             accelerator.backward(loss)
             optimizer.step()
             optimizer.zero_grad()
+            scheduler.step()
             total_loss += loss.item()
 
         model.eval()
@@ -503,7 +517,7 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
 
         if mean_val_dice > best_val_dice:
             best_val_dice = mean_val_dice
-            accelerator.save_state(output_dir=f"./brain_segmentation/checkpoints/img_size_512_T1_best_40_70_120_200")
+            accelerator.save_state(output_dir=f"./brain_segmentation/checkpoints/img_size_512_conventional_T1w_best_80_120_160_220_scheduler")
     if accelerator.is_main_process:
         model.eval()
         os.makedirs("./brain_segmentation/vis", exist_ok=True)
@@ -528,6 +542,41 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
 
     wandb.finish()
 
+def tissue_boundary_cnr(contrast_img, mask_img, tissue_labels, shell_size=1):
+    """
+    Compute CNR between each tissue and its immediate surrounding voxels.
+
+    Args:
+        contrast_img: np.ndarray (2D or 3D)
+        mask_img: np.ndarray of same shape, integer tissue labels
+        tissue_labels: list of labels to evaluate (e.g., [1,2,3,4])
+        shell_size: thickness (in voxels) of the neighborhood shell
+
+    Returns:
+        cnr_dict: {label: CNR_value}
+    """
+    cnr_dict = {}
+    for label in tissue_labels:
+        tissue_mask = mask_img == label
+        if not tissue_mask.any():
+            continue
+
+        # Dilate mask to get surrounding voxels
+        dilated = ndi.binary_dilation(tissue_mask, iterations=shell_size)
+        shell_mask = np.logical_and(dilated, np.logical_not(tissue_mask))
+
+        if not shell_mask.any():
+            continue
+
+        # compute stats
+        mu_tissue, sigma_tissue = contrast_img[tissue_mask].mean(), contrast_img[tissue_mask].std()
+        mu_shell, sigma_shell = contrast_img[shell_mask].mean(), contrast_img[shell_mask].std()
+
+        cnr = abs(mu_tissue - mu_shell) / np.sqrt(sigma_tissue ** 2 + sigma_shell ** 2 + 1e-8)
+        cnr_dict[label] = cnr
+
+    return cnr_dict
+
 def eval(data_dir, ckpt_path):
     device = 'cuda:1'
     test_patients = ['HD_1_DL', 'control_3']
@@ -544,6 +593,10 @@ def eval(data_dir, ckpt_path):
 
     model.eval()
     os.makedirs("./brain_segmentation/vis", exist_ok=True)
+    contrast_names = ['r2', 't1w', 'psir', 't2w']
+    cnr_dict = {}
+    for k, name in enumerate(contrast_names):
+        cnr_dict[name] = []
 
     with torch.no_grad():
         batched_pred = []
@@ -563,12 +616,11 @@ def eval(data_dir, ckpt_path):
                 label_list.append(label[:, idx])
             all_pred = torch.stack(pred_list)
             all_label = torch.stack(label_list)
-            plot_segmentation_grid(data[0, :, 0], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
-                                   file_name=f'val_plot_contrast0_{i}.png')
-            plot_segmentation_grid(data[0, :, 1], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
-                                   file_name=f'val_plot_contrast1_{i}.png')
-            plot_segmentation_grid(data[0, :, 2], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
-                                   file_name=f'val_plot_contrast2_{i}.png')
+            for k, name in enumerate(contrast_names):
+                cnr_dict[name].append(tissue_boundary_cnr(data.detach().cpu()[0,:,k], all_label.detach().cpu()[:,0], [1,2,3], 6))
+            for j in range(data.shape[2]):
+                plot_segmentation_grid(data.squeeze(1)[0, :, j], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
+                                       file_name=f'val_plot_contrast{j}_{i}.png')
             batched_pred.append(all_pred)
             batched_y.append(all_label)
 
@@ -576,16 +628,44 @@ def eval(data_dir, ckpt_path):
     print(f'per_class: {per_class_val_dice}')
     print(f'mean: {mean_val_dice}')
 
+    def mean_cnr_across_patients(cnr_dict):
+        mean_results = {}
+        for contrast, patient_list in cnr_dict.items():
+            tissue_vals = {}
+            for patient in patient_list:
+                for tissue, val in patient.items():
+                    tissue_vals.setdefault(tissue, []).append(val)
+            mean_results[contrast] = {t: np.mean(v) for t, v in tissue_vals.items()}
+        return mean_results
+
+    def to_serializable(obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, (np.int32, np.int64)):
+            return int(obj)
+        elif isinstance(obj, dict):
+            return {k: to_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [to_serializable(v) for v in obj]
+        else:
+            return obj
+
+    mean_cnr = mean_cnr_across_patients(cnr_dict)
+    with open(os.path.join(os.path.dirname(ckpt_path), "mean_cnr.json"), "w") as f:
+        json.dump(to_serializable(mean_cnr), f, indent=4)
+
 if __name__ == "__main__":
     # wandb.login()
     # sweep_config = {
     #     "lr": 1e-4,
-    #     "epochs": 200,
+    #     "epochs": 220,
     #     "batch_size": 32,
     # }
-    # data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_contrast"
+    # data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/convention_T1W"
     # run_training(data_dir, batch_size=sweep_config["batch_size"], epochs=sweep_config["epochs"], sweep_config=sweep_config)
 
-    data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_contrast"
-    ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/Interleave_then_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_finetune/model.safetensors"
+    data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_contrast_4c"
+    ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/img_size_512_T1_best_40_70_120_200_4c_scheduler/model.safetensors"
     eval(data_dir, ckpt_path)

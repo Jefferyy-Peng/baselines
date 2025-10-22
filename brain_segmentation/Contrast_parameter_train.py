@@ -3,6 +3,7 @@ import math
 import os
 import torch
 import wandb
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Subset, Dataset
 from sklearn.model_selection import KFold
 from accelerate import Accelerator
@@ -10,7 +11,11 @@ from torch.optim import Adam
 from monai.metrics import DiceMetric
 from monai.data import decollate_batch
 from monai.inferers import sliding_window_inference
+import scipy.ndimage as ndi
+import nibabel as nib
 from tqdm import tqdm
+import numpy as np
+
 import torch.nn.functional as F
 from safetensors.torch import load_file
 from segmentation_train import plot_segmentation_grid, dice_score_3d
@@ -18,7 +23,8 @@ from segmentation_train import plot_segmentation_grid, dice_score_3d
 from monai.config import KeysCollection
 
 from brain_segmentation.ParameterLayer import SyMRIPSIRParamLayerSigmoid, SyMRIT1WMP2RAGEParamLayerSigmoid, \
-    SyMRIR2ParamLayer, SyMRIPSIRParamLayerLog, SyMRIT1WMP2RAGEParamLayerLog
+    SyMRIR2ParamLayer, SyMRIPSIRParamLayerLog, SyMRIT1WMP2RAGEParamLayerLog, SyMRIT2WFLAREParamLayerLog, \
+    SyMRIdSIRParamLayerLog, SyMRIDIRParamLayerLog
 from brain_segmentation.loss import Deep_Supervised_Loss
 from MedSAMAuto import MedSAMAUTOMULTI
 from brain_segmentation.unet import UNet2d
@@ -36,11 +42,14 @@ from monai.transforms import (
 )
 
 class SyMRISegmentation(nn.Module):
-    def __init__(self, psir_layer, t1w_layer, r2_layer, norm_layer, base_model: nn.Module, plot=True):
+    def __init__(self, psir_layer, t1w_layer, r2_layer, t2w_layer, dSIR_layer, DIR_layer, norm_layer, base_model: nn.Module, plot=True, store=True):
         super().__init__()
         self.psir_layer = psir_layer
         self.t1w_layer = t1w_layer
         self.r2_layer = r2_layer
+        self.t2w_layer = t2w_layer
+        self.dSIR_layer = dSIR_layer
+        # self.DIR_layer = DIR_layer
         self.norm_layer = norm_layer
         self.base_model = base_model
         self.plot = plot
@@ -49,10 +58,16 @@ class SyMRISegmentation(nn.Module):
         psir = self.psir_layer(t1, t2)
         t1w = self.t1w_layer(t1)
         r2 = self.r2_layer(t2)
-        x = torch.cat([r2, t1w, psir], dim=1)
-        x = self.norm_layer(x)
+        t2w = self.t2w_layer(t1,t2,pd)
+        dSIR = self.dSIR_layer(t1,t2,pd)
+        # DIR = self.DIR_layer(t1,t2,pd)
+        x_before = torch.cat([r2, t1w, psir, t2w,dSIR], dim=1)
+        x = self.norm_layer(x_before)
         if self.plot:
-            return self.base_model(x, *args, **kwargs), x
+            if store:
+                return self.base_model(x, *args, **kwargs), x_before
+            else:
+                return self.base_model(x, *args, **kwargs), x
         else:
             return self.base_model(x, *args, **kwargs)
 
@@ -216,11 +231,10 @@ def set_phase(model: SyMRISegmentation, phase: str):
     for p in model.base_model.parameters():
         p.requires_grad = train_seg
     # contrast layers (+ norm if it has params)
-    for m in [model.psir_layer, model.t1w_layer, model.r2_layer, model.norm_layer]:
-        for p in getattr(m, "parameters", lambda: [])():
-            p.requires_grad = train_contrast
+    for m in [p for name, p in model.named_parameters() if "_layer" in name]:
+        m.requires_grad = train_contrast
 
-def build_model(reparam_type):
+def build_model(reparam_type, cold_start=False, store=False):
     # sam_model = sam_model_registry['vit_b'](checkpoint='medsam_vit_b.pth')
     # dense_model = ModelEmb()
     # decoder = MaskDecoder(
@@ -237,26 +251,30 @@ def build_model(reparam_type):
     #     dense_encoder=dense_model,
     #     image_size=512,
     # )
-    base_model = UNet2d(in_channels=3, out_channels=4)
+    base_model = UNet2d(in_channels=5, out_channels=4)
 
     if reparam_type == 'log':
         PSIR_layer = SyMRIPSIRParamLayerLog()
         T1W_layer = SyMRIT1WMP2RAGEParamLayerLog()
+        T2W_layer = SyMRIT2WFLAREParamLayerLog()
+        dSIR_layer = SyMRIdSIRParamLayerLog()
+        DIR_layer = SyMRIDIRParamLayerLog()
     elif reparam_type == 'sigmoid':
         PSIR_layer = SyMRIPSIRParamLayerSigmoid()
         T1W_layer = SyMRIT1WMP2RAGEParamLayerSigmoid()
     R2_layer = SyMRIR2ParamLayer()
     norm_layer = FixedNorm()
 
-    ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/img_size_512_T1_best_40_70_120_200/model.safetensors"
-    state_dict = load_file(ckpt_path)
+    if not cold_start:
+        ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/img_size_512_T1_best_40_70_120_200_4c_scheduler/model.safetensors"
+        state_dict = load_file(ckpt_path)
 
-    base_model.load_state_dict(state_dict)
+        base_model.load_state_dict(state_dict)
 
     for param in base_model.parameters():
         param.requires_grad = False
 
-    return SyMRISegmentation(psir_layer=PSIR_layer, t1w_layer=T1W_layer, r2_layer=R2_layer, norm_layer=norm_layer, base_model=base_model)
+    return SyMRISegmentation(psir_layer=PSIR_layer, t1w_layer=T1W_layer, r2_layer=R2_layer, t2w_layer=T2W_layer, dSIR_layer=dSIR_layer, DIR_layer=DIR_layer, norm_layer=norm_layer, base_model=base_model, store=store)
 
 
 def build_optimizer_and_scheduler(
@@ -277,9 +295,10 @@ def build_optimizer_and_scheduler(
 
     # --- collect parameter groups ---
     contrast_params = []
-    contrast_params += list(model.psir_layer.parameters())
-    contrast_params += list(model.t1w_layer.parameters())
-    contrast_params += list(model.r2_layer.parameters())
+    contrast_params = [
+        p for name, p in model.named_parameters()
+        if "_layer" in name
+    ]
 
     # everything else = base group
     contrast_param_ids = {id(p) for p in contrast_params}
@@ -433,7 +452,12 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
     train_dataset = SyMRI2DDataset(data_dir, split='train', test_patients=test_patients)
     test_dataset = SyMRI3DDataset(data_dir, split='test', test_patients=test_patients)
 
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4)
+
     run = wandb.init(project="syrmi-medsam", config=sweep_config or {}, reinit=True, name=f"SyMRI_train")
+    save_dir = "./brain_segmentation/checkpoints/cold_start_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_T2w_dsir_DIR"
+
     config = wandb.config
     base_lr = config.get("base_lr", 3e-4)
     contrast_lr = config.get("contrast_lr", 1e-3)
@@ -446,11 +470,83 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
     cosine_T_max = 10000
     in_both = 0
     diff_lr_per_param = False
+    cold_start = True
+    accelerator = Accelerator()
 
-    model = build_model(reparam_type)
+    model = build_model(reparam_type, cold_start)
+    i = 0
+    if cold_start:
+        lr = 1e-4
+        alpha_warmup = 120
+        best_val_dice = 0
 
-    state_dict = load_file("/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/Interleave_then_both_diff_lr_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr/model.safetensors")
-    model.load_state_dict(state_dict)
+        optimizer = Adam(model.parameters(), lr=lr, weight_decay=0.001)
+        model, optimizer, train_loader, test_loader = accelerator.prepare(model, optimizer, train_loader, test_loader)
+
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+        loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False, alpha=torch.tensor([0.001, 1., 1., 1.]))
+        set_phase(model, 'seg')
+        total_loss = 0
+        for i in range(200):
+            model.train()
+            for t1, t2, pd, label in tqdm(train_loader):
+                preds, data = model(t1, t2, pd)
+                if i == alpha_warmup:
+                    loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False,
+                                                   alpha=torch.tensor([1.0, 1.0, 1.0, 1.0]))
+                elif i == 70:
+                    loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False,
+                                                   alpha=torch.tensor([0.1, 1.0, 1.0, 1.0]))
+                elif i == 40:
+                    loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False,
+                                                   alpha=torch.tensor([0.01, 1.0, 1.0, 1.0]))
+                loss = loss_fn(preds, label.long())
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
+            scheduler.step()
+            model.eval()
+            all_pred = []
+            all_y = []
+            with torch.no_grad():
+                for t1, t2, pd, label in tqdm(test_loader):
+                    t1 = t1.unsqueeze(2)
+                    t2 = t2.unsqueeze(2)
+                    pd = pd.unsqueeze(2)
+                    pred_list = []
+                    label_list = []
+                    for slice_idx in range(t1.shape[1]):
+                        output, data = model(t1[:,slice_idx], t2[:,slice_idx], pd[:,slice_idx])
+                        pred = torch.argmax(output, dim=1)
+                        pred = accelerator.gather_for_metrics(pred)
+                        label = accelerator.gather_for_metrics(label)
+                        pred_list.append(pred)
+                        label_list.append(label[:, slice_idx])
+                    case_pred = torch.stack(pred_list)
+                    case_label = torch.stack(label_list)
+                    all_pred.append(case_pred)
+                    all_y.append(case_label)
+                per_class_val_dice, mean_val_dice = dice_score_3d(pred=torch.stack(all_pred, dim=0),
+                                                                      y=torch.stack(all_y, dim=0), num_classes=4)
+            log_dict = {
+                "epoch": i,
+                "train_loss": total_loss / len(train_loader),
+                "mean_val_dice": mean_val_dice.item(),
+                "caudate_val_dice": per_class_val_dice[0].item(),
+                "palidus_val_dice": per_class_val_dice[1].item(),
+                "putamen_val_dice": per_class_val_dice[2].item(),
+            }
+            wandb.log(log_dict)
+            if mean_val_dice > best_val_dice:
+                best_val_dice = mean_val_dice
+                accelerator.save_state(output_dir=save_dir)
+
+    if cold_start:
+        state_dict = load_file(os.path.join(save_dir, 'model.safetensors'))
+        model.load_state_dict(state_dict)
+    else:
+        state_dict = load_file("/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/img_size_512_T1_best_40_70_120_200_4c_scheduler/model.safetensors")
+        model.load_state_dict(state_dict)
     optimizer, sched, get_lrs = build_optimizer_and_scheduler(
         model,
         base_lr=base_lr,
@@ -462,16 +558,12 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
     # loss_fn = Deep_Supervised_Loss(mode='Focal', activation=False, alpha=torch.tensor([bgweight, 1., 1., 1.]))
     loss_fn = Deep_Supervised_Loss(mode='Dice', activation=False)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4)
-
-    accelerator = Accelerator()
-    model, optimizer, train_loader, test_loader = accelerator.prepare(model, optimizer, train_loader, test_loader)
     plot_train = False
+
+    model, optimizer, train_loader, test_loader = accelerator.prepare(model, optimizer, train_loader, test_loader)
 
     best_val_dice = 0
     best_epoch = 0
-    save_dir = "./brain_segmentation/checkpoints/Interleave_then_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_finetune"
 
     for epoch in range(epochs):
         in_contrast = (epoch % cycle_len) < contrast_period
@@ -523,9 +615,18 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
         psir_TE = torch.exp(torch.log(torch.tensor(1)) + torch.sigmoid(model.psir_layer.raw_TE.data) * (torch.log(torch.tensor(100)) - torch.log(torch.tensor(1)))).item()
         psir_TI = torch.exp(torch.log(torch.tensor(200)) + torch.sigmoid(model.psir_layer.raw_TI.data) * (torch.log(torch.tensor(3000)) - torch.log(torch.tensor(200)))).item()
         t1w_TE = torch.exp(torch.log(torch.tensor(10)) + torch.sigmoid(model.t1w_layer.raw_TI.data) * (torch.log(torch.tensor(3500)) - torch.log(torch.tensor(10)))).item()
-
+        flare_TE = torch.exp(torch.log(torch.tensor(1)) +
+                  torch.sigmoid(model.t2w_layer.raw_TE.data) * (torch.log(torch.tensor(100)) - torch.log(torch.tensor(1)))).item()
+        flare_TI = torch.exp(torch.log(torch.tensor(1000)) +
+                  torch.sigmoid(model.t2w_layer.raw_TI.data) * (torch.log(torch.tensor(3500)) - torch.log(torch.tensor(1000)))).item()
+        flare_TSAT = torch.exp(torch.log(torch.tensor(400)) +
+                  torch.sigmoid(model.t2w_layer.raw_TSAT.data) * (torch.log(torch.tensor(10000)) - torch.log(torch.tensor(400)))).item()
+        dsir_TIi = torch.exp(torch.log(torch.tensor(1)) +
+                  torch.sigmoid(model.dSIR_layer.raw_TIi.data) * (torch.log(torch.tensor(4000)) - torch.log(torch.tensor(1)))).item()
+        dsir_TIs = torch.exp(torch.log(torch.tensor(1)) +
+                  torch.sigmoid(model.dSIR_layer.raw_TIs.data) * (torch.log(torch.tensor(4000)) - torch.log(torch.tensor(1)))).item()
         log_dict = {
-            "epoch": epoch,
+            "epoch": epoch+i,
             "train_loss": total_loss / len(train_loader),
             "base_lr": base_lr_now,
             "contrast_lr": contrast_lr_now,
@@ -537,6 +638,11 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
             "psir_TE": psir_TE,
             "psir_TI": psir_TI,
             "t1w_TE": t1w_TE,
+            "flare_TE": flare_TE,
+            "flare_TI": flare_TI,
+            "flare_TSAT": flare_TSAT,
+            "dsir_TIi": dsir_TIi,
+            "dsir_TIs": dsir_TIs,
         }
         wandb.log(log_dict)
 
@@ -563,6 +669,11 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
                 "psir_TE": psir_TE,
                 "psir_TI": psir_TI,
                 "t1w_TE": t1w_TE,
+                "flare_TE": flare_TE,
+                "flare_TI": flare_TI,
+                "flare_TSAT": flare_TSAT,
+                "dsir_TIi": dsir_TIi,
+                "dsir_TIs": dsir_TIs,
             }
             with open(f"{save_dir}/best_metrics.json", "w") as f:
                 json.dump(metadata, f, indent=4)
@@ -600,15 +711,52 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
 
     wandb.finish()
 
+
+def tissue_boundary_cnr(contrast_img, mask_img, tissue_labels, shell_size=1):
+    """
+    Compute CNR between each tissue and its immediate surrounding voxels.
+
+    Args:
+        contrast_img: np.ndarray (2D or 3D)
+        mask_img: np.ndarray of same shape, integer tissue labels
+        tissue_labels: list of labels to evaluate (e.g., [1,2,3,4])
+        shell_size: thickness (in voxels) of the neighborhood shell
+
+    Returns:
+        cnr_dict: {label: CNR_value}
+    """
+    cnr_dict = {}
+    for label in tissue_labels:
+        tissue_mask = mask_img == label
+        if not tissue_mask.any():
+            continue
+
+        # Dilate mask to get surrounding voxels
+        dilated = ndi.binary_dilation(tissue_mask, iterations=shell_size)
+        shell_mask = np.logical_and(dilated, np.logical_not(tissue_mask))
+
+        if not shell_mask.any():
+            continue
+
+        # compute stats
+        mu_tissue, sigma_tissue = contrast_img[tissue_mask].mean(), contrast_img[tissue_mask].std()
+        mu_shell, sigma_shell = contrast_img[shell_mask].mean(), contrast_img[shell_mask].std()
+
+        cnr = abs(mu_tissue - mu_shell) / np.sqrt(sigma_tissue ** 2 + sigma_shell ** 2 + 1e-8)
+        cnr_dict[label] = cnr
+
+    return cnr_dict
+
+
 def eval(data_dir, ckpt_path):
     test_patients = ['HD_1_DL', 'control_3']
 
-    device = 'cuda'
+    device = 'cuda:1'
 
     test_dataset = SyMRI3DDataset(data_dir, split='test', test_patients=test_patients)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4)
 
-    model = build_model(reparam_type='log')
+    model = build_model(reparam_type='log', cold_start=True)
 
     state_dict = load_file(ckpt_path)
     model.load_state_dict(state_dict)
@@ -616,6 +764,10 @@ def eval(data_dir, ckpt_path):
     model.eval()
     model.to(device)
     os.makedirs("./brain_segmentation/vis", exist_ok=True)
+    contrast_names = ['r2', 't1w', 'psir', 't2w', 'dSIR']
+    cnr_dict = {}
+    for k, name in enumerate(contrast_names):
+        cnr_dict[name] = []
 
     with torch.no_grad():
         batched_pred = []
@@ -640,12 +792,11 @@ def eval(data_dir, ckpt_path):
             all_pred = torch.stack(pred_list)
             all_label = torch.stack(label_list)
             all_data = torch.stack(data_list)
-            plot_segmentation_grid(all_data.squeeze(1)[:, 0], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
-                                   file_name=f'val_plot_contrast0_{i}.png')
-            plot_segmentation_grid(all_data.squeeze(1)[:, 1], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
-                                   file_name=f'val_plot_contrast1_{i}.png')
-            plot_segmentation_grid(all_data.squeeze(1)[:, 2], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
-                                   file_name=f'val_plot_contrast2_{i}.png')
+            for k, name in enumerate(contrast_names):
+                cnr_dict[name].append(tissue_boundary_cnr(all_data.detach().cpu()[:,0,k], all_label.detach().cpu()[:,0], [1,2,3], 6))
+            for j in range(all_data.shape[2]):
+                plot_segmentation_grid(all_data.squeeze(1)[:, j], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
+                                       file_name=f'val_plot_contrast{j}_{i}.png')
             batched_pred.append(all_pred)
             batched_y.append(all_label)
     per_class_val_dice, mean_val_dice = dice_score_3d(pred=torch.stack(batched_pred, dim=0),
@@ -653,12 +804,105 @@ def eval(data_dir, ckpt_path):
     print(f'per_class: {per_class_val_dice}')
     print(f'mean: {mean_val_dice}')
 
+def store(data_dir, ckpt_path):
+    test_patients = ['HD_1_DL', 'control_3']
+
+    device = 'cuda:1'
+
+    test_dataset = SyMRI3DDataset(data_dir, split='test', test_patients=test_patients)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4)
+
+    model = build_model(reparam_type='log', cold_start=True, store=True)
+
+    state_dict = load_file(ckpt_path)
+    model.load_state_dict(state_dict)
+
+    model.eval()
+    model.to(device)
+    os.makedirs("./brain_segmentation/vis", exist_ok=True)
+    contrast_names = ['r2', 't1w', 'psir', 't2w', 'dSIR']
+    cnr_dict = {}
+    for k, name in enumerate(contrast_names):
+        cnr_dict[name] = []
+
+    with torch.no_grad():
+        batched_pred = []
+        batched_y = []
+        for i, (t1, t2, pd, label) in enumerate(test_loader):
+            t1 = t1.unsqueeze(2).to(device)
+            t2 = t2.unsqueeze(2).to(device)
+            pd = pd.unsqueeze(2).to(device)
+            label = label.to(device)
+            pred_list = []
+            label_list = []
+            data_list = []
+            for slice_idx in range(t1.shape[1]):
+                output, data = model(t1[:, slice_idx], t2[:, slice_idx], pd[:, slice_idx])
+                pred = torch.argmax(output, dim=1)
+                # if accelerator.is_main_process:
+                #     print(f'pred: {pred.shape}')
+                #     print(f'label: {label.shape}')
+                pred_list.append(pred)
+                label_list.append(label[:, slice_idx])
+                data_list.append(data)
+            all_pred = torch.stack(pred_list)
+            all_label = torch.stack(label_list)
+            all_data = torch.stack(data_list)
+            if hasattr(data, "detach"):
+                all_data = all_data.detach().cpu()
+
+            for ci in range(all_data.shape[2]):
+                # (D, 1, H, W) → (D, H, W)
+                contrast_data = all_data[:, 0, ci, :, :].permute(1,2,0).numpy()
+
+                # Make it contiguous in memory
+                contrast_data = np.ascontiguousarray(contrast_data)
+
+                # Create nibabel image
+                img = nib.Nifti1Image(contrast_data, np.eye(4))
+
+                # Save with naming like "subject_contrast0.nii.gz"
+                os.makedirs(os.path.join(os.path.dirname(ckpt_path), "results"), exist_ok=True)
+                fname = os.path.join(os.path.dirname(ckpt_path), "results", f"S{i}_contrast{contrast_names[ci]}.nii.gz")
+                nib.save(img, fname)
+                print(f"Saved: {fname}")
+            for k, name in enumerate(contrast_names):
+                cnr_dict[name].append(tissue_boundary_cnr(all_data.detach().cpu()[:,0,k], all_label.detach().cpu()[:,0], [1,2,3], 2))
+
+    def mean_cnr_across_patients(cnr_dict):
+        mean_results = {}
+        for contrast, patient_list in cnr_dict.items():
+            tissue_vals = {}
+            for patient in patient_list:
+                for tissue, val in patient.items():
+                    tissue_vals.setdefault(tissue, []).append(val)
+            mean_results[contrast] = {t: np.mean(v) for t, v in tissue_vals.items()}
+        return mean_results
+
+    def to_serializable(obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, (np.int32, np.int64)):
+            return int(obj)
+        elif isinstance(obj, dict):
+            return {k: to_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [to_serializable(v) for v in obj]
+        else:
+            return obj
+
+    mean_cnr = mean_cnr_across_patients(cnr_dict)
+    with open(os.path.join(os.path.dirname(ckpt_path), "mean_cnr.json"), "w") as f:
+        json.dump(to_serializable(mean_cnr), f, indent=4)
+
 if __name__ == "__main__":
     # wandb.login()
     # sweep_config = {
     #     "base_lr": 3e-4,
     #     "contrast_lr": 1e-2,
-    #     "epochs": 140,
+    #     "epochs": 200,
     #     "batch_size": 8,
     #     "contrast_period": 10,
     #     "seg_period": 10,
@@ -667,6 +911,10 @@ if __name__ == "__main__":
     # run_training(data_dir, batch_size=sweep_config["batch_size"], epochs=sweep_config["epochs"], sweep_config=sweep_config)
 
 
+    # data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_raw"
+    # ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/cold_start_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_addT2w_dsir/model.safetensors"
+    # eval(data_dir, ckpt_path)
+
     data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_raw"
-    ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/Interleave_then_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_finetune/model.safetensors"
-    eval(data_dir, ckpt_path)
+    ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/cold_start_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_addT2w_dsir/model.safetensors"
+    store(data_dir, ckpt_path)

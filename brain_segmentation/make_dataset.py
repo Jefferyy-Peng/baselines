@@ -309,7 +309,7 @@ if __name__ == "__main__":
     phase = 'seg'
     base_dir = '/home/yxpengcs/Datasets/MRI/CHDI_Multi_Contrast/SyMRI_processed_DL'
     label_dir = '/home/yxpengcs/Datasets/MRI/CHDI_Multi_Contrast/segs'
-    output_dir = './dataset/ucsd_multi_contrast_segdata'
+    output_dir = './dataset/ucsd_multi_contrast_segdata_4c'
     # base_dir = '../nnUNet/nnUNetFrame/DATASET/nnUNet_raw/Dataset500_CaudatePutamenGlobus/imagesTr'
     # label_dir = '../nnUNet/nnUNetFrame/DATASET/nnUNet_raw/Dataset500_CaudatePutamenGlobus/labelsTr'
     # output_dir = './dataset/multi_contrast_segdata_qiren'

@@ -17,6 +17,7 @@ def convert_syMRI_to_2d(input_dir, output_dir, with_label=False):
         r2 = nib.load(os.path.join(sample_path, "R2.nii.gz")).get_fdata()
         t1w = nib.load(os.path.join(sample_path, "T1W.nii.gz")).get_fdata()
         psir = nib.load(os.path.join(sample_path, "PSIR.nii.gz")).get_fdata()
+        t2w = nib.load(os.path.join(sample_path, "T2W.nii.gz")).get_fdata()
         label = nib.load(os.path.join(sample_path, "seg.nii.gz")).get_fdata() if with_label else None
 
         os.makedirs(os.path.join(output_dir, f"{name}"), exist_ok=True)
@@ -25,7 +26,8 @@ def convert_syMRI_to_2d(input_dir, output_dir, with_label=False):
             slice_dict = {
                 'r2': torch.tensor(r2[:, :, i], dtype=torch.float32).unsqueeze(0),
                 't1w': torch.tensor(t1w[:, :, i], dtype=torch.float32).unsqueeze(0),
-                'psir': torch.tensor(psir[:, :, i], dtype=torch.float32).unsqueeze(0)
+                'psir': torch.tensor(psir[:, :, i], dtype=torch.float32).unsqueeze(0),
+                't2w': torch.tensor(t2w[:, :, i], dtype=torch.float32).unsqueeze(0),
             }
             if with_label:
                 slice_dict['label'] = torch.tensor(label[:, :, i], dtype=torch.long).unsqueeze(0)
@@ -34,4 +36,4 @@ def convert_syMRI_to_2d(input_dir, output_dir, with_label=False):
             torch.save(slice_dict, out_path)
 
 # Example usage:
-convert_syMRI_to_2d('/home/yxpengcs/Datasets/MRI/CHDI_Multi_Contrast/SyMRI_processed_DL/', "dataset/SyMRI_contrast", with_label=True)
+convert_syMRI_to_2d('/home/yxpengcs/Datasets/MRI/CHDI_Multi_Contrast/SyMRI_processed_DL/', "dataset/SyMRI_contrast_4c", with_label=True)

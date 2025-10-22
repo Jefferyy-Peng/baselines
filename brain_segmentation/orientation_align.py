@@ -1,49 +1,26 @@
 import nibabel as nib
 import numpy as np
+import torch
 from scipy.ndimage import affine_transform
+import torch.nn.functional as F
+from nibabel.processing import resample_from_to
+
+from brain_segmentation.segmentation_train import plot_segmentation_grid
 
 
 def resample_mask_to_target(source_img, target_img):
     """
-    Resample a mask (integer) source image to match the voxel grid and orientation of a target image.
-
-    Nearest-neighbor interpolation is used to ensure integer values are maintained.
-
-    Args:
-    - source_img: nibabel Nifti1Image (the image to be resampled)
-    - target_img: nibabel Nifti1Image (the reference image to align to)
-
-    Returns:
-    - resampled_img: nibabel Nifti1Image (the resampled image aligned to the target)
+    Resample integer label mask to target grid with nearest neighbor.
+    Uses NiBabel's robust affine logic.
     """
-    # Get the data and affine of the source and target images
-    source_data = source_img.get_fdata()
-    source_affine = source_img.affine
-    target_affine = target_img.affine
-    target_shape = target_img.shape
-
-    # Compute the transformation from source to target space
-    transformation = np.linalg.inv(target_affine).dot(source_affine)
-
-    # Resample the source image using nearest-neighbor interpolation
-    resampled_data = affine_transform(
-        source_data, transformation[:3, :3], offset=transformation[:3, 3],
-        output_shape=target_shape, order=0,  # Order 0 is nearest-neighbor interpolation
-        mode='constant', cval=0)  # Set background to 0 for out-of-bounds areas
-
-    # Ensure that resampled data is in integer format
-    resampled_data = np.rint(resampled_data).astype(np.int16)  # Convert to int16 (or other integer type)
-
-    # Create a new NIfTI image with the resampled data and target's affine
-    resampled_img = nib.Nifti1Image(resampled_data, target_affine)
-
-    return resampled_img
-
+    resampled_img = resample_from_to(source_img, target_img, order=0)  # order=0 = nearest neighbor
+    data = np.asanyarray(resampled_img.dataobj).astype(np.int16)
+    return nib.Nifti1Image(data, target_img.affine)
 
 # Example usage
-source_nii_path = '/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/new_log/eval/Freesurfer/aseg_control3.nii.gz'
-target_nii_path = '/home/yxpengcs/Datasets/MRI/CHDI_Multi_Contrast/SyMRI_processed_DL/control_3/seg.nii.gz'
-output_resampled_path = '/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/new_log/eval/Freesurfer/aseg_control3_resampled.nii.gz'
+source_nii_path = '/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/new_log/eval/Freesurfer/aseg_HD_1.nii.gz'
+target_nii_path = '/home/yxpengcs/Datasets/MRI/CHDI_Multi_Contrast/SyMRI_processed_DL/HD_1_DL/seg.nii.gz'
+output_resampled_path = '/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/new_log/eval/Freesurfer/aseg_HD_1_resampled.nii.gz'
 
 # Load the source and target NIfTI images
 source_img = nib.load(source_nii_path)
@@ -55,3 +32,52 @@ resampled_img = resample_mask_to_target(source_img, target_img)
 # Save the resampled image
 nib.save(resampled_img, output_resampled_path)
 print(f"Resampled image saved to {output_resampled_path}")
+
+
+def load_mask(path):
+    nii = nib.load(path)
+    data = np.asanyarray(nii.dataobj).astype(np.int16)
+    return torch.from_numpy(data)
+
+# --- 2. Remap the prediction mask ---
+def remap_pred_mask(pred_mask):
+    """
+    pred_mask: torch.Tensor of shape (D,H,W), label space same as FreeSurfer IDs.
+    Returns remapped mask with:
+      0 = background
+      1 = caudate
+      2 = pallidum
+      3 = putamen
+    """
+    remapped = torch.zeros_like(pred_mask, dtype=torch.uint8)
+
+    caudate = torch.isin(pred_mask, torch.tensor([11, 50], dtype=pred_mask.dtype))
+    pallidum = torch.isin(pred_mask, torch.tensor([13, 52], dtype=pred_mask.dtype))
+    putamen  = torch.isin(pred_mask, torch.tensor([12, 51], dtype=pred_mask.dtype))
+
+    remapped[caudate] = 1
+    remapped[pallidum] = 2
+    remapped[putamen] = 3
+
+    return remapped
+
+# --- 3. Dice computation ---
+def dice_per_class(pred, gt, num_classes=4, eps=1e-6):
+    pred_onehot = F.one_hot(pred.long(), num_classes=num_classes).permute(3,0,1,2).float()
+    gt_onehot   = F.one_hot(gt.long(),   num_classes=num_classes).permute(3,0,1,2).float()
+
+    intersection = (pred_onehot * gt_onehot).sum(dim=(1,2,3))
+    union = pred_onehot.sum(dim=(1,2,3)) + gt_onehot.sum(dim=(1,2,3))
+    dice = (2 * intersection + eps) / (union + eps)
+    return dice[1:]  # skip background
+
+pred_mask = load_mask(output_resampled_path)
+gt_mask   = load_mask(target_nii_path)
+
+# remap prediction only
+pred_remap = remap_pred_mask(pred_mask)
+
+dice_vals = dice_per_class(pred_remap, gt_mask)
+
+plot_segmentation_grid(torch.zeros(106,512,512), pred_remap.permute(2,0,1), gt_mask.permute(2,0,1), slice_interval=1,
+                       file_name=f'freesurf_plot_HD1.png')
