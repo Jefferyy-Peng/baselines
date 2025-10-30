@@ -71,9 +71,9 @@ class SyMRIPSIRParamLayerLog(nn.Module):
     def __init__(self):
         super().__init__()
         # Raw parameters (unconstrained, will be passed through sigmoid)
-        self.raw_TR = nn.Parameter(torch.tensor(5.))    # maps to [1, 10000]
-        self.raw_TI = nn.Parameter(torch.tensor(1.3))    # maps to [200, 3000]
-        self.raw_TE = nn.Parameter(torch.tensor(0.7))  # maps to [1, 100]
+        self.raw_TR = nn.Parameter(torch.tensor(2.85))    # maps to [1, 10000]
+        self.raw_TI = nn.Parameter(torch.tensor(-0.66))    # maps to [200, 3000]
+        self.raw_TE = nn.Parameter(torch.tensor(0.))  # maps to [1, 100]
         self.eps = 1e-10
 
     def forward(self, t1, t2):
@@ -146,22 +146,22 @@ class SyMRIDIRParamLayerLog(nn.Module):
     def __init__(self):
         super().__init__()
         # Raw parameters (unconstrained, will be passed through sigmoid)
-        self.raw_TI1 = nn.Parameter(torch.tensor(0.9))    # maps to [10, 3500]
-        self.raw_TI2 = nn.Parameter(torch.tensor(2.4))    # maps to [10, 3500]
-        self.raw_TE = nn.Parameter(torch.tensor(0.6))    # maps to [10, 3500]
-        self.raw_TR = nn.Parameter(torch.tensor(1.4))    # maps to [10, 3500]
+        self.raw_TI1 = nn.Parameter(torch.tensor(1.5))    # maps to [10, 3500]
+        self.raw_TI2 = nn.Parameter(torch.tensor(0.1))    # maps to [10, 3500]
+        self.raw_TE = nn.Parameter(torch.tensor(1.2))    # maps to [10, 3500]
+        self.raw_TR = nn.Parameter(torch.tensor(3.0))    # maps to [10, 3500]
         self.eps = 1e-10
 
     def forward(self, t1,t2,pd):
         # Apply sigmoid reparameterization to enforce bounds
-        TI_1 = torch.exp(torch.log(torch.tensor(1000)) +
-                  torch.sigmoid(self.raw_TI1) * (torch.log(torch.tensor(3500)) - torch.log(torch.tensor(1000))))
-        TI_2 = torch.exp(torch.log(torch.tensor(1)) +
-                  torch.sigmoid(self.raw_TI2) * (torch.log(torch.tensor(600)) - torch.log(torch.tensor(1))))
+        TI_1 = torch.exp(torch.log(torch.tensor(500)) +
+                  torch.sigmoid(self.raw_TI1) * (torch.log(torch.tensor(6000)) - torch.log(torch.tensor(500))))
+        TI_2 = torch.exp(torch.log(torch.tensor(100)) +
+                  torch.sigmoid(self.raw_TI2) * (torch.log(torch.tensor(2000)) - torch.log(torch.tensor(100))))
         TE = torch.exp(torch.log(torch.tensor(1)) +
                   torch.sigmoid(self.raw_TE) * (torch.log(torch.tensor(400)) - torch.log(torch.tensor(1))))
-        TR = torch.exp(torch.log(torch.tensor(10)) +
-                  torch.sigmoid(self.raw_TR) * (torch.log(torch.tensor(10000)) - torch.log(torch.tensor(10))))
+        TR = torch.exp(torch.log(torch.tensor(100)) +
+                  torch.sigmoid(self.raw_TR) * (torch.log(torch.tensor(20000)) - torch.log(torch.tensor(100))))
         t1_safe = t1.clamp(min=self.eps)
         t2_safe = t2.clamp(min=self.eps)
         pd_safe = pd.clamp(min=self.eps)
@@ -176,24 +176,24 @@ class SyMRIT2WFLAREParamLayerLog(nn.Module):
     def __init__(self):
         super().__init__()
         # Raw parameters (unconstrained, will be passed through sigmoid)
-        self.raw_TE = nn.Parameter(torch.tensor(0.3))    # maps to [1, 100]
-        self.raw_TI = nn.Parameter(torch.tensor(-0.1))    # maps to [1000, 3500]
-        self.raw_TSAT = nn.Parameter(torch.tensor(-1.9))    # maps to [400, 10000]
+        self.raw_TE = nn.Parameter(torch.tensor(1.74))    # maps to [1, 100]
+        self.raw_TI = nn.Parameter(torch.tensor(1.6))    # maps to [1000, 3500]
+        self.raw_TSAT = nn.Parameter(torch.tensor(0.78))    # maps to [400, 10000]
         self.eps = 1e-10
 
     def forward(self, t1, t2, pd):
         # Apply sigmoid reparameterization to enforce bounds
         TE = torch.exp(torch.log(torch.tensor(1)) +
-                  torch.sigmoid(self.raw_TE) * (torch.log(torch.tensor(100)) - torch.log(torch.tensor(1))))
+                  torch.sigmoid(self.raw_TE) * (torch.log(torch.tensor(200)) - torch.log(torch.tensor(1))))
         TI = torch.exp(torch.log(torch.tensor(100)) +
-                  torch.sigmoid(self.raw_TI) * (torch.log(torch.tensor(3500)) - torch.log(torch.tensor(100))))
+                  torch.sigmoid(self.raw_TI) * (torch.log(torch.tensor(6000)) - torch.log(torch.tensor(100))))
         TSAT = torch.exp(torch.log(torch.tensor(10)) +
-                  torch.sigmoid(self.raw_TSAT) * (torch.log(torch.tensor(10000)) - torch.log(torch.tensor(400))))
+                  torch.sigmoid(self.raw_TSAT) * (torch.log(torch.tensor(1000)) - torch.log(torch.tensor(10))))
         t1_safe = t1.clamp(min=self.eps)
         t2_safe = t2.clamp(min=self.eps)
         pd_safe = pd.clamp(min=self.eps)
 
-        t2w = torch.abs(pd_safe)*torch.exp(-TSAT/t1_safe/1000)*torch.exp(-TE/t2_safe/1000)*(1-2*torch.exp(-TI/t1_safe/1000))
+        t2w = torch.abs(pd_safe*torch.exp(-TSAT/t1_safe/1000)*torch.exp(-TE/t2_safe/1000)*(1-2*torch.exp(-TI/t1_safe/1000)))
         zero_mask = (t1 == 0) | (t2 == 0) | (pd == 0)
         t2w = t2w.masked_fill(zero_mask, 0.0)
 

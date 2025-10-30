@@ -42,16 +42,17 @@ from monai.transforms import (
 )
 
 class SyMRISegmentation(nn.Module):
-    def __init__(self, psir_layer, t1w_layer, r2_layer, t2w_layer, dSIR_layer, DIR_layer, norm_layer, base_model: nn.Module, plot=True, store=True):
+    def __init__(self, psir_layer=None, t1w_layer=None, r2_layer=None, t2w_layer=None, dSIR_layer=None, DIR_layer=None, norm_layer=None, base_model: nn.Module=None, plot=True, store=True):
         super().__init__()
         self.psir_layer = psir_layer
         self.t1w_layer = t1w_layer
         self.r2_layer = r2_layer
         self.t2w_layer = t2w_layer
         self.dSIR_layer = dSIR_layer
-        # self.DIR_layer = DIR_layer
+        self.DIR_layer = DIR_layer
         self.norm_layer = norm_layer
         self.base_model = base_model
+        self.store = store
         self.plot = plot
 
     def forward(self, t1, t2, pd, *args, **kwargs):
@@ -59,12 +60,13 @@ class SyMRISegmentation(nn.Module):
         t1w = self.t1w_layer(t1)
         r2 = self.r2_layer(t2)
         t2w = self.t2w_layer(t1,t2,pd)
-        dSIR = self.dSIR_layer(t1,t2,pd)
-        # DIR = self.DIR_layer(t1,t2,pd)
-        x_before = torch.cat([r2, t1w, psir, t2w,dSIR], dim=1)
+        # dSIR = self.dSIR_layer(t1,t2,pd)
+        DIR = self.DIR_layer(t1,t2,pd)
+        # x_before = torch.cat([r2, t1w, psir, t2w], dim=1)
+        x_before = torch.cat([r2, t1w, t2w, psir, DIR], dim=1)
         x = self.norm_layer(x_before)
         if self.plot:
-            if store:
+            if self.store:
                 return self.base_model(x, *args, **kwargs), x_before
             else:
                 return self.base_model(x, *args, **kwargs), x
@@ -274,7 +276,8 @@ def build_model(reparam_type, cold_start=False, store=False):
     for param in base_model.parameters():
         param.requires_grad = False
 
-    return SyMRISegmentation(psir_layer=PSIR_layer, t1w_layer=T1W_layer, r2_layer=R2_layer, t2w_layer=T2W_layer, dSIR_layer=dSIR_layer, DIR_layer=DIR_layer, norm_layer=norm_layer, base_model=base_model, store=store)
+    # return SyMRISegmentation(psir_layer=PSIR_layer, t1w_layer=T1W_layer, r2_layer=R2_layer, t2w_layer=T2W_layer, dSIR_layer=dSIR_layer, DIR_layer=DIR_layer, norm_layer=norm_layer, base_model=base_model, store=store)
+    return SyMRISegmentation(psir_layer=PSIR_layer, t1w_layer=T1W_layer, r2_layer=R2_layer, t2w_layer=T2W_layer, DIR_layer=DIR_layer, norm_layer=norm_layer, base_model=base_model, store=store)
 
 
 def build_optimizer_and_scheduler(
@@ -456,7 +459,7 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4)
 
     run = wandb.init(project="syrmi-medsam", config=sweep_config or {}, reinit=True, name=f"SyMRI_train")
-    save_dir = "./brain_segmentation/checkpoints/cold_start_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_T2w_dsir_DIR"
+    save_dir = "./brain_segmentation/checkpoints/cold_start_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_T1T2w_psir_DIR_new"
 
     config = wandb.config
     base_lr = config.get("base_lr", 3e-4)
@@ -616,15 +619,23 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
         psir_TI = torch.exp(torch.log(torch.tensor(200)) + torch.sigmoid(model.psir_layer.raw_TI.data) * (torch.log(torch.tensor(3000)) - torch.log(torch.tensor(200)))).item()
         t1w_TE = torch.exp(torch.log(torch.tensor(10)) + torch.sigmoid(model.t1w_layer.raw_TI.data) * (torch.log(torch.tensor(3500)) - torch.log(torch.tensor(10)))).item()
         flare_TE = torch.exp(torch.log(torch.tensor(1)) +
-                  torch.sigmoid(model.t2w_layer.raw_TE.data) * (torch.log(torch.tensor(100)) - torch.log(torch.tensor(1)))).item()
-        flare_TI = torch.exp(torch.log(torch.tensor(1000)) +
-                  torch.sigmoid(model.t2w_layer.raw_TI.data) * (torch.log(torch.tensor(3500)) - torch.log(torch.tensor(1000)))).item()
-        flare_TSAT = torch.exp(torch.log(torch.tensor(400)) +
-                  torch.sigmoid(model.t2w_layer.raw_TSAT.data) * (torch.log(torch.tensor(10000)) - torch.log(torch.tensor(400)))).item()
-        dsir_TIi = torch.exp(torch.log(torch.tensor(1)) +
-                  torch.sigmoid(model.dSIR_layer.raw_TIi.data) * (torch.log(torch.tensor(4000)) - torch.log(torch.tensor(1)))).item()
-        dsir_TIs = torch.exp(torch.log(torch.tensor(1)) +
-                  torch.sigmoid(model.dSIR_layer.raw_TIs.data) * (torch.log(torch.tensor(4000)) - torch.log(torch.tensor(1)))).item()
+                  torch.sigmoid(model.t2w_layer.raw_TE.data) * (torch.log(torch.tensor(200)) - torch.log(torch.tensor(1)))).item()
+        flare_TI = torch.exp(torch.log(torch.tensor(100)) +
+                  torch.sigmoid(model.t2w_layer.raw_TI.data) * (torch.log(torch.tensor(6000)) - torch.log(torch.tensor(100)))).item()
+        flare_TSAT = torch.exp(torch.log(torch.tensor(10)) +
+                  torch.sigmoid(model.t2w_layer.raw_TSAT.data) * (torch.log(torch.tensor(1000)) - torch.log(torch.tensor(10)))).item()
+        # dsir_TIi = torch.exp(torch.log(torch.tensor(1)) +
+        #           torch.sigmoid(model.dSIR_layer.raw_TIi.data) * (torch.log(torch.tensor(4000)) - torch.log(torch.tensor(1)))).item()
+        # dsir_TIs = torch.exp(torch.log(torch.tensor(1)) +
+        #           torch.sigmoid(model.dSIR_layer.raw_TIs.data) * (torch.log(torch.tensor(4000)) - torch.log(torch.tensor(1)))).item()
+        DIR_TI1 = torch.exp(torch.log(torch.tensor(500)) +
+                  torch.sigmoid(model.DIR_layer.raw_TI1.data) * (torch.log(torch.tensor(6000)) - torch.log(torch.tensor(500)))).item()
+        DIR_TI2 = torch.exp(torch.log(torch.tensor(100)) +
+                  torch.sigmoid(model.DIR_layer.raw_TI2.data) * (torch.log(torch.tensor(2000)) - torch.log(torch.tensor(100)))).item()
+        DIR_TE = torch.exp(torch.log(torch.tensor(1)) +
+                  torch.sigmoid(model.DIR_layer.raw_TE.data) * (torch.log(torch.tensor(400)) - torch.log(torch.tensor(1)))).item()
+        DIR_TR = torch.exp(torch.log(torch.tensor(100)) +
+                  torch.sigmoid(model.DIR_layer.raw_TR.data) * (torch.log(torch.tensor(20000)) - torch.log(torch.tensor(100)))).item()
         log_dict = {
             "epoch": epoch+i,
             "train_loss": total_loss / len(train_loader),
@@ -641,8 +652,12 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
             "flare_TE": flare_TE,
             "flare_TI": flare_TI,
             "flare_TSAT": flare_TSAT,
-            "dsir_TIi": dsir_TIi,
-            "dsir_TIs": dsir_TIs,
+            # "dsir_TIi": dsir_TIi,
+            # "dsir_TIs": dsir_TIs,
+            "DIR_TI1": DIR_TI1,
+            "DIR_TI2": DIR_TI2,
+            "DIR_TE": DIR_TE,
+            "DIR_TR": DIR_TR,
         }
         wandb.log(log_dict)
 
@@ -672,8 +687,12 @@ def run_training(data_dir, batch_size=8, epochs=20, sweep_config=None):
                 "flare_TE": flare_TE,
                 "flare_TI": flare_TI,
                 "flare_TSAT": flare_TSAT,
-                "dsir_TIi": dsir_TIi,
-                "dsir_TIs": dsir_TIs,
+                # "dsir_TIi": dsir_TIi,
+                # "dsir_TIs": dsir_TIs,
+                "DIR_TI1": DIR_TI1,
+                "DIR_TI2": DIR_TI2,
+                "DIR_TE": DIR_TE,
+                "DIR_TR": DIR_TR,
             }
             with open(f"{save_dir}/best_metrics.json", "w") as f:
                 json.dump(metadata, f, indent=4)
@@ -751,12 +770,12 @@ def tissue_boundary_cnr(contrast_img, mask_img, tissue_labels, shell_size=1):
 def eval(data_dir, ckpt_path):
     test_patients = ['HD_1_DL', 'control_3']
 
-    device = 'cuda:1'
+    device = 'cuda:2'
 
     test_dataset = SyMRI3DDataset(data_dir, split='test', test_patients=test_patients)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4)
 
-    model = build_model(reparam_type='log', cold_start=True)
+    model = build_model(reparam_type='log', cold_start=True, store=True)
 
     state_dict = load_file(ckpt_path)
     model.load_state_dict(state_dict)
@@ -764,7 +783,7 @@ def eval(data_dir, ckpt_path):
     model.eval()
     model.to(device)
     os.makedirs("./brain_segmentation/vis", exist_ok=True)
-    contrast_names = ['r2', 't1w', 'psir', 't2w', 'dSIR']
+    contrast_names = ['r2', 't1w', 'psir', 'DIR']
     cnr_dict = {}
     for k, name in enumerate(contrast_names):
         cnr_dict[name] = []
@@ -792,10 +811,13 @@ def eval(data_dir, ckpt_path):
             all_pred = torch.stack(pred_list)
             all_label = torch.stack(label_list)
             all_data = torch.stack(data_list)
+            min_val = all_data.amin(dim=(0, 1, 3, 4), keepdim=True)  # shape (1, 1, c, 1, 1)
+            max_val = all_data.amax(dim=(0, 1, 3, 4), keepdim=True)  # shape (1, 1, c, 1, 1)
+            all_data_norm = (all_data - min_val) / (max_val - min_val + 1e-12)
             for k, name in enumerate(contrast_names):
-                cnr_dict[name].append(tissue_boundary_cnr(all_data.detach().cpu()[:,0,k], all_label.detach().cpu()[:,0], [1,2,3], 6))
+                cnr_dict[name].append(tissue_boundary_cnr(all_data_norm.detach().cpu()[:,0,k], all_label.detach().cpu()[:,0], [1,2,3], 6))
             for j in range(all_data.shape[2]):
-                plot_segmentation_grid(all_data.squeeze(1)[:, j], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
+                plot_segmentation_grid(all_data_norm.squeeze(1)[:, j], all_pred.squeeze(1), all_label.squeeze(1), slice_interval=1,
                                        file_name=f'val_plot_contrast{j}_{i}.png')
             batched_pred.append(all_pred)
             batched_y.append(all_label)
@@ -803,6 +825,38 @@ def eval(data_dir, ckpt_path):
                                                       y=torch.stack(batched_y, dim=0), num_classes=4)
     print(f'per_class: {per_class_val_dice}')
     print(f'mean: {mean_val_dice}')
+
+def save_integer_predictions_as_nifti(all_pred, ckpt_path, idx, reference_nii=None):
+    """
+    Stack integer predictions and save as .nii.gz volume.
+
+    Args:
+        pred_list: list of torch.Tensor, each containing integer predictions
+                   shape: (H, W) or (D, H, W)
+        ckpt_path: path to output .nii.gz file
+        reference_nii: optional path to a reference NIfTI file
+                       to copy affine/header orientation info
+    """
+    # 1. Stack predictions into one tensor
+    all_pred = all_pred.squeeze(1).permute(1,2,0).cpu().numpy().astype(np.int16)
+
+    # 2. Prepare orientation info
+    if reference_nii is not None and os.path.exists(reference_nii):
+        ref_img = nib.load(reference_nii)
+        affine = ref_img.affine
+        header = ref_img.header
+        print(f"Using affine/header from reference: {reference_nii}")
+    else:
+        affine = np.eye(4)
+        header = None
+        print("⚠️ No reference provided — using identity affine.")
+
+    # 3. Create NIfTI image
+    nii_img = nib.Nifti1Image(all_pred, affine, header)
+
+    # 4. Ensure target directory exists and save
+    os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+    nib.save(nii_img, ckpt_path.replace('model.safetensors', f'pred_seg_{idx}.nii.gz'))
 
 def store(data_dir, ckpt_path):
     test_patients = ['HD_1_DL', 'control_3']
@@ -820,7 +874,7 @@ def store(data_dir, ckpt_path):
     model.eval()
     model.to(device)
     os.makedirs("./brain_segmentation/vis", exist_ok=True)
-    contrast_names = ['r2', 't1w', 'psir', 't2w', 'dSIR']
+    contrast_names = ['r2', 't1w', 'psir', 't2w']
     cnr_dict = {}
     for k, name in enumerate(contrast_names):
         cnr_dict[name] = []
@@ -846,6 +900,7 @@ def store(data_dir, ckpt_path):
                 label_list.append(label[:, slice_idx])
                 data_list.append(data)
             all_pred = torch.stack(pred_list)
+            save_integer_predictions_as_nifti(all_pred, ckpt_path, i)
             all_label = torch.stack(label_list)
             all_data = torch.stack(data_list)
             if hasattr(data, "detach"):
@@ -898,23 +953,23 @@ def store(data_dir, ckpt_path):
         json.dump(to_serializable(mean_cnr), f, indent=4)
 
 if __name__ == "__main__":
-    # wandb.login()
-    # sweep_config = {
-    #     "base_lr": 3e-4,
-    #     "contrast_lr": 1e-2,
-    #     "epochs": 200,
-    #     "batch_size": 8,
-    #     "contrast_period": 10,
-    #     "seg_period": 10,
-    # }
-    # data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_raw"
-    # run_training(data_dir, batch_size=sweep_config["batch_size"], epochs=sweep_config["epochs"], sweep_config=sweep_config)
+    wandb.login()
+    sweep_config = {
+        "base_lr": 3e-4,
+        "contrast_lr": 1e-2,
+        "epochs": 200,
+        "batch_size": 8,
+        "contrast_period": 10,
+        "seg_period": 10,
+    }
+    data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_raw"
+    run_training(data_dir, batch_size=sweep_config["batch_size"], epochs=sweep_config["epochs"], sweep_config=sweep_config)
 
 
     # data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_raw"
-    # ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/cold_start_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_addT2w_dsir/model.safetensors"
+    # ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/cold_start_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_T2w_dsir_DIR/model.safetensors"
     # eval(data_dir, ckpt_path)
 
-    data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_raw"
-    ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/cold_start_both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_addT2w_dsir/model.safetensors"
-    store(data_dir, ckpt_path)
+    # data_dir = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/dataset/SyMRI_raw"
+    # ckpt_path = "/home/yxpengcs/PycharmProjects/ITUNet-for-PICAI-2022-Challenge/brain_segmentation/brain_segmentation/checkpoints/both_img_size_512_Log_reparam_diff_init_bgweight_1_exp_decay_lr_dice_addT2w/model.safetensors"
+    # store(data_dir, ckpt_path)

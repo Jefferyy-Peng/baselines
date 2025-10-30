@@ -5,6 +5,7 @@ from collections import OrderedDict
 import torch
 import wandb
 from matplotlib import pyplot as plt
+import nibabel as nib
 from safetensors.torch import load_file
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Subset, Dataset
@@ -577,6 +578,39 @@ def tissue_boundary_cnr(contrast_img, mask_img, tissue_labels, shell_size=1):
 
     return cnr_dict
 
+
+def save_integer_predictions_as_nifti(all_pred, ckpt_path, idx, reference_nii=None):
+    """
+    Stack integer predictions and save as .nii.gz volume.
+
+    Args:
+        pred_list: list of torch.Tensor, each containing integer predictions
+                   shape: (H, W) or (D, H, W)
+        ckpt_path: path to output .nii.gz file
+        reference_nii: optional path to a reference NIfTI file
+                       to copy affine/header orientation info
+    """
+    # 1. Stack predictions into one tensor
+    all_pred = all_pred.squeeze(1).cpu().numpy().astype(np.int16)
+
+    # 2. Prepare orientation info
+    if reference_nii is not None and os.path.exists(reference_nii):
+        ref_img = nib.load(reference_nii)
+        affine = ref_img.affine
+        header = ref_img.header
+        print(f"Using affine/header from reference: {reference_nii}")
+    else:
+        affine = np.eye(4)
+        header = None
+        print("⚠️ No reference provided — using identity affine.")
+
+    # 3. Create NIfTI image
+    nii_img = nib.Nifti1Image(all_pred, affine, header)
+
+    # 4. Ensure target directory exists and save
+    os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+    nib.save(nii_img, ckpt_path.replace('model.safetensors', f'pred_seg_{idx}.nii.gz'))
+
 def eval(data_dir, ckpt_path):
     device = 'cuda:1'
     test_patients = ['HD_1_DL', 'control_3']
@@ -615,6 +649,7 @@ def eval(data_dir, ckpt_path):
                 pred_list.append(pred)
                 label_list.append(label[:, idx])
             all_pred = torch.stack(pred_list)
+            save_integer_predictions_as_nifti(all_pred, ckpt_path, i)
             all_label = torch.stack(label_list)
             for k, name in enumerate(contrast_names):
                 cnr_dict[name].append(tissue_boundary_cnr(data.detach().cpu()[0,:,k], all_label.detach().cpu()[:,0], [1,2,3], 6))
